@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "User" ALTER COLUMN "ghUserId" DROP NOT NULL,
+ALTER COLUMN "accessToken" DROP NOT NULL,
+ALTER COLUMN "refreshToken" DROP NOT NULL,
+ALTER COLUMN "tokenExpiresAt" DROP NOT NULL;

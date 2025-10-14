@@ -1,0 +1,282 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String        @id @default(cuid())
+  name           String?
+  email          String?       @unique
+  emailVerified  DateTime?
+  ghUserId       String?       @unique
+  accessToken    String?
+  refreshToken   String?
+  tokenExpiresAt DateTime?
+  settings       UserSettings?
+  locationId     String?
+  companyId      String?
+  jobs           Job[]
+  accounts       Account[]
+  sessions       Session[]
+}
+
+model UserSettings {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  zipCodes    String[] // selected ZIPs
+  radiusMiles Int
+  priceMin    Int?
+  priceMax    Int?
+  planLimit   Int      @default(100) // GHL plan limit
+  User        User     @relation(fields: [userId], references: [id])
+}
+
+model Property {
+  id      Int     @id @default(autoincrement())
+  ownerId Int
+  owner   Contact @relation(fields: [ownerId], references: [id], name: "ContactProperties")
+
+  tags                   String?  @map("Tags")
+  addressFull            String?  @map("Address (full)")
+  country                String?  @map("Country")
+  streetAddress          String?  @map("Street address")
+  postalCode             String?  @map("Postal Code")
+  state                  String?  @map("State")
+  city                   String?  @map("City")
+  freeAndClear           String?  @map("Free and Clear")
+  estimatedMtgPayment    String?  @map("Estimated Mtg Payment")
+  estimatedEquity        String?  @map("Estimated Equity")
+  automatedValue         String?  @map("Automated Value")
+  automatedValueMinimum  String?  @map("Automated Value Minimum")
+  automatedValueMaximum  String?  @map("Automated Value Maximum")
+  equity                 String?  @map("Equity %")
+  loanType               String?  @map("Loan Type")
+  loanMaturityDate       String?  @map("Loan Maturity Date")
+  taxValue               String?  @map("Tax Value")
+  firstLienAmount        String?  @map("First Lien Amount")
+  lenderName             String?  @map("Lender Name")
+  dateOfAuction          String?  @map("Date Of Auction")
+  plaintiffName          String?  @map("Plaintiff Name")
+  estOpeningBid          String?  @map("Est Opening Bid")
+  estimatedMtgBalance    String?  @map("Estimated Mtg Balance")
+  leadSource             String?  @map("Lead Source")
+  householdIncome        String?  @map("Household Income")
+  liquidAssets           String?  @map("Liquid Assets")
+  contact2               String?  @map("Contact 2")
+  ownerState             String?  @map("Owner State")
+  ownerZip               String?  @map("Owner Zip")
+  contact1Phone1Dnc      String?  @map("Contact 1 Phone 1 DNC")
+  contact1Phone1LineType String?  @map("Contact 1 Phone 1 Line Type")
+  contact1Phone2         String?  @map("Contact 1 Phone 2")
+  contact1Phone2Dnc      String?  @map("Contact 1 Phone 2 DNC")
+  contact1Phone2LineType String?  @map("Contact 1 Phone 2 Line Type")
+  contact1Email2         String?  @map("Contact 1 Email 2")
+  contact2Phone1         String?  @map("Contact 2 Phone 1")
+  contact2Phone1Dnc      String?  @map("Contact 2 Phone 1 DNC")
+  contact2Phone1LineType String?  @map("Contact 2 Phone 1 Line Type")
+  contact2Phone2         String?  @map("Contact 2 Phone 2")
+  contact2Phone2Dnc      String?  @map("Contact 2 Phone 2 DNC")
+  contact2Phone2LineType String?  @map("Contact 2 Phone 2 Line Type")
+  contact2Email1         String?  @map("Contact 2 Email 1")
+  contact2Email2         String?  @map("Contact 2 Email 2")
+  landline1              String?  @map("Landline 1")
+  landline2              String?  @map("Landline 2")
+  landline3              String?  @map("Landline 3")
+  landline4              String?  @map("Landline 4")
+  landline5              String?  @map("Landline 5")
+  contact1Phone3         String?  @map("Contact 1 Phone 3")
+  mlsNumber              String?  @map("MLS Number")
+  aboveGradeFinishedSqft String?  @map("Above Grade Finished SqFt")
+  bathrooms              String?  @map("Bathrooms")
+  bedrooms               String?  @map("Bedrooms")
+  price                  Int?  @map("Price")
+  lotSize                String?  @map("Lot Size")
+  yearBuilt              String?  @map("Year Built")
+  propertyType           String?  @map("Property Type")
+  ownerAddress           String?  @map("Owner Address")
+  ownerCity              String?  @map("Owner City")
+  mlsStatus              String?  @map("MLS Status")
+  askingPrice            String?  @map("asking price")
+  realtorSName           String?  @map("Realtor's Name")
+  attorney               String?  @map("Attorney")
+  attorneyPhoneNumber    String?  @map("Attorney Phone Number")
+  workingWithRealtor     String?  @map("Working with Realtor")
+  sellerMotivation       String?  @map("Seller Motivation")
+  ownerType              String?  @map("Owner Type")
+  ownerOccupied          String?  @map("Owner Occupied")
+  heatingType            String?  @map("Heating Type")
+  sellerTiming           String?  @map("Seller Timing")
+  coolingType            String?  @map("Cooling Type")
+  homeCondition          String?  @map("Home Condition")
+  basementSqft           String?  @map("Basement SqFt")
+  basementType           String?  @map("Basement Type")
+  parkingType            String?  @map("Parking Type")
+  parkingSpaces          String?  @map("Parking Spaces")
+  ownerStatus            String?  @map("Owner Status")
+  rentalHistory          String?  @map("Rental History")
+  inPreforclosure        String?  @map("In Preforclosure")
+  pool                   String?  @map("Pool")
+  county                 String?  @map("County")
+  resaleValueArv         String?  @map("Resale Value (ARV)")
+  data                   String?  @map("Data")
+  ingestedAt    DateTime @default(now())
+  pushed                 Boolean  @default(false)
+  createdAt              DateTime @default(now())
+
+  @@unique([ownerId, addressFull], name: "owner_address_unique")
+}
+
+model Contact {
+  id                Int        @id @default(autoincrement())
+  createdAt         DateTime   @default(now())
+  additionalEmails  String?    @map("Additional Emails")
+  additionalEmails1 String?    @map("Additional Emails.1")
+  additionalPhones  String?    @map("Additional Phones")
+  additionalPhones1 String?    @map("Additional Phones.1")
+  businessName      String?    @map("Business Name")
+  companyName       String?    @map("Company Name")
+  contactId         String     @unique @map("Contact Id")
+  email             String?    @map("Email")
+  firstName         String?    @map("First Name")
+  lastName          String?    @map("Last Name")
+  phone             String?    @map("Phone")
+  pushed            Boolean    @default(false)
+  ghlContactId      String? @unique
+  properties        Property[] @relation("ContactProperties")
+}
+model ZipCode {
+  // Primary key, mapped to the 'zip' column in the CSV
+  code           String   @id @map("zip")
+  // Geographical coordinates
+  latitude       Float    @map("lat")
+  longitude      Float    @map("lng")
+  // City and State information
+  city           String
+  stateId        String   @map("state_id")
+  stateName      String   @map("state_name")
+  // Boolean flags, converted from "TRUE"/"FALSE" strings
+  zcta           Boolean
+  imprecise      Boolean
+  military       Boolean
+  // Population and density, nullable as some entries might be empty or zero
+  population     Int?
+  density        Float?
+  // County information
+  countyFips     String   @map("county_fips")
+  countyName     String   @map("county_name")
+  // Complex string formats for county data
+  countyWeights  String   @map("county_weights") // JSON-like string
+  countyNamesAll String   @map("county_names_all") // Pipe-separated string
+  countyFipsAll  String   @map("county_fips_all") // Pipe-separated string
+  // Other attributes
+  parentZcta     String?  @map("parent_zcta") // Nullable
+  timezone       String
+  updatedAt      DateTime @updatedAt
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  type        String
+  payload     Json
+  status      String    @default("pending")
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  updatedAt   DateTime  @updatedAt
+  userId      String
+  User        User      @relation(fields: [userId], references: [id])
+}
+
+model WebhookLog {
+  id           String        @id @default(cuid())
+  runId        Int?
+  run          IngestionRun? @relation(fields: [runId], references: [id])
+  direction    String
+  url          String
+  sentAt       DateTime      @default(now())
+  payload      Json?
+  headers      Json?
+  responseCode Int?
+  responseBody Json?
+  receivedAt   DateTime?
+}
+
+model IngestionRun {
+  id             Int             @id @default(autoincrement())
+  startedAt      DateTime        @default(now())
+  finishedAt     DateTime?
+  status         String          @default("running")
+  rowCount       Int?
+  error          String?
+  webhookLogs    WebhookLog[] // one-to-many
+  processedFiles ProcessedFile[]
+}
+
+model ProcessedFile {
+  id           Int          @id @default(autoincrement())
+  name         String       @unique
+  downloadedAt DateTime     @default(now())
+  runId        Int
+  run          IngestionRun @relation(fields: [runId], references: [id])
+}
+
+model Account {
+  id                String @id @default(cuid())
+  userId            String
+  provider          String @map("providerId")
+  type              String @map("providerType")
+  providerAccountId String
+
+  locationId    String?
+  companyId     String?
+  // These four fields must match the snake_case keys NextAuth passes in:
+  access_token  String?
+  refresh_token String?
+  expires_at    Int?
+  token_type    String?
+  scope         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  accessToken  String?  @unique
+  userId       String
+  expires      DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model VerificationRequest {
+  id         String   @id @default(cuid())
+  identifier String
+  token      String   @unique
+  expires    DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([identifier, token])
+}
+
