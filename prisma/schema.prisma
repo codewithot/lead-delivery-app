@@ -45,7 +45,7 @@ model Property {
   id      Int     @id @default(autoincrement())
   ownerId Int
   owner   Contact @relation(fields: [ownerId], references: [id], name: "ContactProperties")
-
+  ghlPropertyId          String?  @unique
   tags                   String?  @map("Tags")
   addressFull            String?  @map("Address (full)")
   country                String?  @map("Country")
