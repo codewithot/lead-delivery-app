@@ -9,21 +9,13 @@ const API_VERSION = "2021-07-28";
 
 // Multi-account configuration
 const GHL_ACCOUNTS = [
-  {
-    name: "ProEdge Sandbox",
-    locationId: process.env.GHL_LOCATION_ID || "FmyBGGVhzMmKaYko3PsW",
-    privateToken:
-      process.env.GHL_PRIVATE_TOKEN ||
-      "pit-04ee49b1-2e1c-4276-ba9c-7e20b3cacb3c",
-  },
-  {
-    name: "SmartytheRealtor",
-    locationId:
-      process.env.GHL_LOCATION_IDsmartytheRealtor || "P4Rt72mIVJCPh4w5FHRt",
-    privateToken:
-      process.env.GHL_PRIVATE_TOKENsmartytheRealtor ||
-      "pit-b1652b14-6a49-4c64-91d6-74dffe481cbc",
-  },
+  // {
+  //   name: "ProEdge Sandbox",
+  //   locationId: process.env.GHL_LOCATION_ID || "FmyBGGVhzMmKaYko3PsW",
+  //   privateToken:
+  //     process.env.GHL_PRIVATE_TOKEN ||
+  //     "pit-04ee49b1-2e1c-4276-ba9c-7e20b3cacb3c",
+  // },
   {
     name: "Direct One Home Buyers",
     locationId:
@@ -32,6 +24,14 @@ const GHL_ACCOUNTS = [
       process.env.GHL_PRIVATE_TOKENdirectOneHomeBuyers ||
       "pit-f6adc9b4-0de0-4911-a09b-ff57cb9b3a41",
   },
+  // {
+  //   name: "SmartytheRealtor",
+  //   locationId:
+  //     process.env.GHL_LOCATION_IDsmartytheRealtor || "P4Rt72mIVJCPh4w5FHRt",
+  //   privateToken:
+  //     process.env.GHL_PRIVATE_TOKENsmartytheRealtor ||
+  //     "pit-b1652b14-6a49-4c64-91d6-74dffe481cbc",
+  // },
 ];
 
 function extractErrorInfo(err: unknown): {
@@ -134,13 +134,18 @@ async function createRelationBetweenRecords(
   secondRecordId: string,
   privateToken: string,
   locationId: string
-): Promise<{ success: boolean; data?: any; error?: any }> {
+): Promise<{
+  success: boolean;
+  data?: any;
+  error?: any;
+  alreadyExists?: boolean;
+}> {
   if (!associationId || !firstRecordId || !secondRecordId) {
     return { success: false, error: "missing associationId or record ids" };
   }
 
   const body = {
-    locationId: locationId,
+    locationId,
     associationId,
     firstRecordId,
     secondRecordId,
@@ -162,14 +167,28 @@ async function createRelationBetweenRecords(
 
     if (resp.status === 201 || resp.status === 200) {
       return { success: true, data: resp.data };
-    } else {
-      return {
-        success: false,
-        error: { status: resp.status, data: resp.data },
-      };
     }
+
+    return { success: false, error: { status: resp.status, data: resp.data } };
   } catch (err: any) {
-    return { success: false, error: err.response?.data ?? err.message };
+    const status = err.response?.status;
+    const data = err.response?.data;
+
+    // Treat duplicate-relation 400 as success (already associated)
+    const message = (data && (data.message || data.error || ""))
+      .toString()
+      .toLowerCase();
+    const isDuplicate =
+      status === 400 &&
+      (message.includes("duplicate") ||
+        message.includes("duplicate relation") ||
+        message.includes("duplicate association"));
+
+    if (isDuplicate) {
+      return { success: true, data, alreadyExists: true };
+    }
+
+    return { success: false, error: data ?? err.message };
   }
 }
 
@@ -714,6 +733,13 @@ export async function pushLeadsForUser(job: Job) {
     // We need their GHL IDs to create associations later
     // ========================================================================
     for (const [contactId, contact] of contactsToPush) {
+      if (!contact.email && !contact.phone) {
+        console.warn(
+          `⚠️ Skipping contact ID ${contactId} - no email or phone number`
+        );
+        continue;
+      }
+      // First try to find existing contact
       const existingGhlId = await findGhlContactByEmailOrPhone(
         contact.email,
         contact.phone,
@@ -722,9 +748,20 @@ export async function pushLeadsForUser(job: Job) {
       );
 
       if (existingGhlId) {
-        console.info(`Found existing contact in GHL: ${existingGhlId}`);
-        contactIdMap[contact.id] = existingGhlId;
-        continue; // Skip creation
+        console.info(
+          `✓ Found existing contact in GHL: ${existingGhlId} for contact ID ${contactId}`
+        );
+        contactIdMap[contactId] = existingGhlId;
+
+        // Update our local DB with the GHL ID if we don't have it
+        if (!contact.ghlContactId) {
+          await prisma.contact.update({
+            where: { id: contactId },
+            data: { ghlContactId: existingGhlId },
+          });
+        }
+
+        continue; // Skip creation attempt
       }
 
       const property = properties.find((p) => p.ownerId === contactId);
@@ -1073,15 +1110,65 @@ export async function pushLeadsForUser(job: Job) {
 
       if (existingGhlId) {
         console.info(`Found existing property in GHL: ${existingGhlId}`);
-        // Use existing ID for associations
+
+        let ghlContactId: string | undefined = contactIdMap[p.ownerId!];
+
+        if (!ghlContactId && p.ownerId) {
+          const owner = await prisma.contact.findUnique({
+            where: { id: p.ownerId },
+            select: { email: true, phone: true, ghlContactId: true },
+          });
+
+          if (owner) {
+            ghlContactId = await findGhlContactByEmailOrPhone(
+              owner.email,
+              owner.phone,
+              account.privateToken,
+              account.locationId
+            );
+          }
+        }
+
+        if (ghlContactId && existingGhlId) {
+          console.info(
+            `🔗 [${account.name}] Associating existing property ${p.id} (GHL: ${existingGhlId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`
+          );
+          await ensureContactPropertyAssociation(
+            ghlContactId,
+            existingGhlId,
+            account.privateToken,
+            account.locationId
+          );
+          associationCount++;
+        }
         continue; // Skip creation
       }
+
       if (!p.ownerId) {
         console.warn(`⚠️ Property ID ${p.id} has no ownerId, skipping`);
         continue;
       }
 
-      const ghlContactId = contactIdMap[p.ownerId];
+      // Try to get GHL contact ID from our map first
+      let ghlContactId: string | undefined = contactIdMap[p.ownerId];
+
+      // If not in map, try to find it again (fallback)
+      if (!ghlContactId) {
+        const owner = await prisma.contact.findUnique({
+          where: { id: p.ownerId },
+          select: { email: true, phone: true, ghlContactId: true },
+        });
+
+        if (owner) {
+          ghlContactId = await findGhlContactByEmailOrPhone(
+            owner.email,
+            owner.phone,
+            account.privateToken,
+            account.locationId
+          );
+        }
+      }
+
       if (!ghlContactId) {
         console.warn(
           `⚠️ Property ID ${p.id} owner (${p.ownerId}) wasn't pushed successfully, skipping property`
@@ -1184,12 +1271,11 @@ export async function pushLeadsForUser(job: Job) {
         if (resp.status === 201) {
           const ghlPropertyId = extractGhlId(resp.data);
           if (ghlPropertyId) {
-            // Update local DB with GHL ID
             await prisma.property.update({
               where: { id: p.id },
               data: {
-                pushed: account === GHL_ACCOUNTS[0],
-                ghlPropertyId,
+                pushed: account === GHL_ACCOUNTS[0], // Only mark pushed for first account
+                ghlPropertyId, // Store GHL ID
               },
             });
           }
@@ -1205,13 +1291,6 @@ export async function pushLeadsForUser(job: Job) {
               "Full resp.data:",
               JSON.stringify(resp.data, null, 2)
             );
-          }
-
-          if (account === GHL_ACCOUNTS[0]) {
-            await prisma.property.update({
-              where: { id: p.id },
-              data: { pushed: true },
-            });
           }
 
           pushedPropertyCount++;
@@ -1294,54 +1373,214 @@ async function findGhlContactByEmailOrPhone(
   privateToken: string,
   locationId: string
 ): Promise<string | undefined> {
-  try {
-    if (email) {
-      const resp = await axios.get(`${GHL_BASE_URL}/contacts/`, {
-        headers: {
-          Authorization: `Bearer ${privateToken}`,
-          Version: API_VERSION,
-        },
-        params: { locationId, email },
-      });
-      if (resp.data?.contacts?.[0]?.id) return resp.data.contacts[0].id;
-    }
-    if (phone) {
-      const resp = await axios.get(`${GHL_BASE_URL}/contacts/`, {
-        headers: {
-          Authorization: `Bearer ${privateToken}`,
-          Version: API_VERSION,
-        },
-        params: { locationId, phone },
-      });
-      if (resp.data?.contacts?.[0]?.id) return resp.data.contacts[0].id;
-    }
-  } catch (e) {
-    // Ignore search errors
+  console.info(
+    `🔍 Searching for existing contact - Email: ${email || "N/A"}, Phone: ${
+      phone || "N/A"
+    }`
+  );
+
+  if (!email && !phone) {
+    console.warn(`⚠️ No email or phone provided for contact search`);
+    return undefined;
   }
-  return undefined;
+
+  try {
+    const headers = {
+      Authorization: `Bearer ${privateToken}`,
+      Version: API_VERSION,
+      Accept: "application/json",
+    };
+
+    // 1️⃣ Try searching by email first (if available)
+    if (email) {
+      console.debug(`📧 Searching GHL by email: ${email}`);
+      try {
+        const resp = await axios.get(
+          `${GHL_BASE_URL}/contacts/search/duplicate`,
+          {
+            headers,
+            params: {
+              locationId,
+              email, // Email is already URL-safe in most cases
+            },
+          }
+        );
+
+        const contact = resp.data?.contact || resp.data;
+        if (contact?.id) {
+          console.info(`✅ Found contact by email: ${contact.id}`);
+          return contact.id;
+        }
+      } catch (emailError: any) {
+        const status = emailError.response?.status;
+
+        // 404 means no duplicate found
+        if (status === 404) {
+          console.debug(`ℹ️ No contact found by email (404)`);
+        }
+        // 422 validation error
+        else if (status === 422) {
+          console.warn(
+            `⚠️ Email search validation error (422):`,
+            emailError.response?.data
+          );
+        }
+        // Other errors
+        else {
+          console.error(
+            `❌ Email search failed with status ${status}:`,
+            emailError.response?.data || emailError.message
+          );
+          if (status === 401 || status === 403) {
+            throw emailError;
+          }
+        }
+      }
+    }
+
+    // 2️⃣ Try searching by phone using 'number' parameter (if email search failed)
+    if (phone) {
+      console.debug(`📱 Searching GHL by phone: ${phone}`);
+      try {
+        const resp = await axios.get(
+          `${GHL_BASE_URL}/contacts/search/duplicate`,
+          {
+            headers,
+            params: {
+              locationId,
+              number: phone, // Note: parameter is 'number' not 'phone'
+            },
+            // Axios automatically URL-encodes params
+          }
+        );
+
+        const contact = resp.data?.contact || resp.data;
+        if (contact?.id) {
+          console.info(`✅ Found contact by phone: ${contact.id}`);
+          return contact.id;
+        }
+      } catch (phoneError: any) {
+        const status = phoneError.response?.status;
+
+        // 404 means no duplicate found
+        if (status === 404) {
+          console.debug(`ℹ️ No contact found by phone (404)`);
+        }
+        // 422 validation error
+        else if (status === 422) {
+          console.warn(
+            `⚠️ Phone search validation error (422):`,
+            phoneError.response?.data
+          );
+        }
+        // Other errors
+        else {
+          console.error(
+            `❌ Phone search failed with status ${status}:`,
+            phoneError.response?.data || phoneError.message
+          );
+          if (status === 401 || status === 403) {
+            throw phoneError;
+          }
+        }
+      }
+    }
+
+    console.info(
+      `ℹ️ Contact not found in GHL (this is normal for new contacts)`
+    );
+    return undefined;
+  } catch (e) {
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    const status = (e as any).response?.status;
+
+    console.error(`❌ Critical error searching for contact:`, {
+      error: errorMsg,
+      status,
+      email: email || "N/A",
+      phone: phone || "N/A",
+      responseData: (e as any).response?.data,
+    });
+
+    // Re-throw auth errors so the job stops
+    if (status === 401 || status === 403) {
+      throw e;
+    }
+
+    return undefined;
+  }
 }
 
 async function findGhlPropertyByAddress(
-  address: string | null, // Allow null
+  address: string | null,
   privateToken: string,
   locationId: string
 ): Promise<string | undefined> {
-  if (!address) return undefined; // Early return if null
+  if (!address) {
+    console.debug(`⚠️ No address provided for property search`);
+    return undefined;
+  }
+
+  console.info(`🏠 Searching for existing property: ${address}`);
 
   try {
-    const resp = await axios.get(
-      `${GHL_BASE_URL}/objects/${CUSTOM_OBJECT_KEY}/records`,
+    const headers = {
+      Authorization: `Bearer ${privateToken}`,
+      Version: API_VERSION,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    };
+
+    // Use POST to search custom object records
+    // Note: Make sure "address" is configured as a searchable property in your custom object schema
+    const resp = await axios.post(
+      `${GHL_BASE_URL}/objects/${CUSTOM_OBJECT_KEY}/records/search`,
       {
-        headers: {
-          Authorization: `Bearer ${privateToken}`,
-          Version: API_VERSION,
-        },
-        params: { locationId, query: address },
+        locationId,
+        page: 1,
+        pageLimit: 1, // Only need the first match
+        query: address, // Search by address - ensure address is a searchable property
+      },
+      {
+        headers,
       }
     );
-    if (resp.data?.records?.[0]?.id) return resp.data.records[0].id;
-  } catch (e) {
-    // Ignore search errors
+
+    const records = resp.data?.records || [];
+
+    if (records.length > 0 && records[0]?.id) {
+      console.info(`✅ Found existing property: ${records[0].id}`);
+      return records[0].id;
+    }
+
+    console.debug(`ℹ️ No property found with address: ${address}`);
+    return undefined;
+  } catch (error: any) {
+    const status = error.response?.status;
+    const errorData = error.response?.data;
+
+    // Log different error types
+    if (status === 404) {
+      console.debug(`ℹ️ No property found (404)`);
+    } else if (status === 400) {
+      console.warn(`⚠️ Bad request searching for property:`, errorData);
+      // This might mean 'address' is not configured as a searchable property
+    } else if (status === 422) {
+      console.warn(`⚠️ Validation error searching for property:`, errorData);
+    } else if (status === 401 || status === 403) {
+      console.error(
+        `❌ Authentication error searching for property:`,
+        errorData
+      );
+      throw error; // Re-throw auth errors
+    } else {
+      console.error(`❌ Error searching for property:`, {
+        status,
+        error: errorData || error.message,
+        address,
+      });
+    }
+
+    return undefined;
   }
-  return undefined;
 }
