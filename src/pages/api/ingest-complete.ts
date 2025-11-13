@@ -1,15 +1,15 @@
+// src/pages/api/ingest-complete.ts
 import { NextApiRequest, NextApiResponse } from "next";
 import { z } from "zod";
 import { PrismaClient, User, UserSettings } from "@prisma/client";
+import { getQueueInstance, JOB_TYPES, DeliverLeadsPayload } from "@/lib/queue";
 
 const prisma = new PrismaClient();
 
-// Type for user with settings
 type UserWithSettings = User & {
   settings: UserSettings | null;
 };
 
-// Validation schema
 const webhookSchema = z.object({
   runId: z.union([z.string(), z.number()]).transform((val) => String(val)),
   ingestedAt: z.string().datetime(),
@@ -21,34 +21,26 @@ export default async function handler(
 ) {
   console.log("🔗 Webhook received");
 
-  // Only allow POST requests
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    // Get headers for logging
     const headers = req.headers;
-    console.log("📋 Headers:", headers);
-
-    // Verify webhook secret
     const hookSecret = headers["x-hook-secret"];
+
     if (!hookSecret || hookSecret !== process.env.WEBHOOK_SECRET) {
       console.log("❌ Invalid or missing webhook secret");
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    // Get request body (Pages Router automatically parses JSON)
     const body = req.body;
-    console.log("📦 Raw body:", body);
-
-    // Check if body exists
     if (!body) {
       console.log("❌ Empty request body");
       return res.status(400).json({ error: "Request body is required" });
     }
 
-    // Log the webhook (this should work with your schema now)
+    // Log the webhook
     try {
       await prisma.webhookLog.create({
         data: {
@@ -59,14 +51,12 @@ export default async function handler(
           receivedAt: new Date(),
         },
       });
-
       console.log("✅ Webhook logged successfully");
     } catch (logError) {
-      console.error("⚠️ Failed to log webhook (continuing anyway):", logError);
-      // Don't fail the webhook just because logging failed
+      console.error("⚠️ Failed to log webhook:", logError);
     }
 
-    // Validate the payload
+    // Validate payload
     let validatedData;
     try {
       validatedData = webhookSchema.parse(body);
@@ -82,63 +72,73 @@ export default async function handler(
 
     console.log("🎯 Processing webhook for runId:", validatedData.runId);
 
-    // Core Logic: Create jobs for all users to deliver leads
-    try {
-      // Get all users with their settings
-      const users = await prisma.user.findMany({
-        include: {
-          settings: true,
+    // Get queue instance
+    const boss = await getQueueInstance();
+
+    // Get all users with settings
+    const users = await prisma.user.findMany({
+      include: {
+        settings: true,
+      },
+    });
+
+    console.log(`📋 Found ${users.length} users to process`);
+
+    // Create jobs in pg-boss queue
+    const jobPromises = users.map(async (user: UserWithSettings) => {
+      if (!user.settings) {
+        console.log(`⚠️ User ${user.id} has no settings, skipping`);
+        return null;
+      }
+
+      const payload: DeliverLeadsPayload = {
+        ingestedAt: validatedData.ingestedAt,
+        runId: validatedData.runId,
+        userId: user.id,
+      };
+
+      // Send to pg-boss queue
+      const jobId = await boss.send(JOB_TYPES.DELIVER_LEADS, payload, {
+        singletonKey: `deliver-leads-${user.id}-${validatedData.runId}`,
+        retryLimit: 3,
+        retryDelay: 60,
+        retryBackoff: true,
+        expireInSeconds: 3600,
+      });
+
+      // Check if jobId was created successfully
+      if (!jobId) {
+        console.error(`❌ Failed to create job for user ${user.id}`);
+        return null;
+      }
+
+      // Also create in database for tracking
+      const job = await prisma.job.create({
+        data: {
+          id: jobId, // Now TypeScript knows this is a string
+          type: JOB_TYPES.DELIVER_LEADS,
+          payload: payload as any,
+          userId: user.id,
+          status: "pending",
         },
       });
 
-      console.log(`📋 Found ${users.length} users to process`);
+      console.log(`✅ Created job ${jobId} for user ${user.id}`);
+      return job;
+    });
 
-      // Create a job for each user
-      const jobPromises = users.map(async (user: UserWithSettings) => {
-        if (!user.settings) {
-          console.log(`⚠️ User ${user.id} has no settings, skipping`);
-          return null;
-        }
+    const jobs = await Promise.all(jobPromises);
+    const successfulJobs = jobs.filter((job) => job !== null);
 
-        const job = await prisma.job.create({
-          data: {
-            type: "deliver-leads",
-            payload: {
-              ingestedAt: validatedData.ingestedAt,
-              runId: validatedData.runId,
-              userId: user.id,
-            },
-            userId: user.id,
-            status: "pending",
-          },
-        });
+    console.log(`🎉 Successfully queued ${successfulJobs.length} jobs`);
 
-        console.log(`✅ Created job ${job.id} for user ${user.id}`);
-        return job;
-      });
-
-      const jobs = await Promise.all(jobPromises);
-      const successfulJobs = jobs.filter((job) => job !== null);
-
-      console.log(`🎉 Successfully created ${successfulJobs.length} jobs`);
-
-      return res.status(200).json({
-        success: true,
-        runId: validatedData.runId,
-        message: "Webhook processed successfully",
-        jobsCreated: successfulJobs.length,
-        totalUsers: users.length,
-      });
-    } catch (processingError) {
-      console.error("❌ Failed to process webhook:", processingError);
-      return res.status(500).json({
-        error: "Failed to process webhook",
-        details:
-          processingError instanceof Error
-            ? processingError.message
-            : "Unknown error",
-      });
-    }
+    return res.status(200).json({
+      success: true,
+      runId: validatedData.runId,
+      message: "Webhook processed successfully",
+      jobsCreated: successfulJobs.length,
+      totalUsers: users.length,
+    });
   } catch (error) {
     console.error("💥 Unexpected error:", error);
     return res.status(500).json({

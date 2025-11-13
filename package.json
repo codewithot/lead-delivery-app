@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "worker": "node --loader ts-node/esm src/lib/worker.ts",
+    "worker": "tsx src/workers/master.ts",
+    "worker:dev": "tsx watch src/workers/master.ts",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -23,6 +24,7 @@
     "next": "^15.3.4",
     "next-auth": "^4.24.11",
     "node-cron": "^4.2.0",
+    "pg-boss": "^12.1.1",
     "prisma": "^6.11.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -40,6 +42,7 @@
     "eslint-config-next": "15.3.4",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.2"
   }
 }
