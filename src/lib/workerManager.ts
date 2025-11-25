@@ -34,15 +34,36 @@ export class WorkerManager {
         console.log(`👷 Worker ${this.workerId} processing job ${job.id}`);
 
         try {
-          // Update database job status
-          await prisma.job.update({
+          // Try to find existing job or create it if it doesn't exist
+          const existingJob = await prisma.job.findUnique({
             where: { id: job.id },
-            data: {
-              status: "in_progress",
-              startedAt: new Date(),
-              attempts: { increment: 1 },
-            },
           });
+
+          if (existingJob) {
+            // Update existing job
+            await prisma.job.update({
+              where: { id: job.id },
+              data: {
+                status: "in_progress",
+                startedAt: new Date(),
+                attempts: { increment: 1 },
+              },
+            });
+          } else {
+            // Create job record if it doesn't exist (race condition scenario)
+            console.log(`ℹ️  Creating missing job record for ${job.id}`);
+            await prisma.job.create({
+              data: {
+                id: job.id,
+                type: job.name,
+                payload: job.data as any,
+                userId: job.data.userId,
+                status: "in_progress",
+                startedAt: new Date(),
+                attempts: 1,
+              },
+            });
+          }
 
           // Create a synthetic Job object for pushLeadsForUser
           const jobData: Job = {
@@ -83,11 +104,20 @@ export class WorkerManager {
             errorMessage
           );
 
-          // Update database job status
+          // Update or create failed job status using upsert
           await prisma.job
-            .update({
+            .upsert({
               where: { id: job.id },
-              data: {
+              create: {
+                id: job.id,
+                type: job.name,
+                payload: job.data as any,
+                userId: job.data.userId,
+                status: "failed",
+                lastError: errorMessage,
+                attempts: 1,
+              },
+              update: {
                 status: "failed",
                 lastError: errorMessage,
               },

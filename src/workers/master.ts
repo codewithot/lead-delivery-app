@@ -1,6 +1,6 @@
 // src/workers/master.ts
 import { WorkerManager } from "../lib/workerManager";
-import { closeQueue } from "../lib/queue";
+import { closeQueue, getQueueInstance, JOB_TYPES } from "../lib/queue";
 
 const WORKER_COUNT = parseInt(process.env.WORKER_COUNT || "10", 10);
 
@@ -9,7 +9,20 @@ class MasterProcess {
   private isShuttingDown: boolean = false;
 
   async start() {
-    console.log(`🎯 Starting ${WORKER_COUNT} workers...`);
+    console.log(`🎯 Initializing worker system...\n`);
+
+    // Initialize queue and create the deliver-leads queue
+    console.log("🔧 Setting up queue...");
+    const boss = await getQueueInstance();
+
+    try {
+      await boss.createQueue(JOB_TYPES.DELIVER_LEADS);
+      console.log("✅ Queue created successfully\n");
+    } catch (error) {
+      console.log("ℹ️  Queue already exists or creation skipped\n");
+    }
+
+    console.log(`🎯 Starting ${WORKER_COUNT} workers...\n`);
 
     // Create and start all workers
     for (let i = 1; i <= WORKER_COUNT; i++) {
@@ -18,7 +31,7 @@ class MasterProcess {
       await worker.start();
     }
 
-    console.log(`✅ All ${WORKER_COUNT} workers started successfully`);
+    console.log(`\n✅ All ${WORKER_COUNT} workers started successfully\n`);
 
     // Setup graceful shutdown
     this.setupGracefulShutdown();

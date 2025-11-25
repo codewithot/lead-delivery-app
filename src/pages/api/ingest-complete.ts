@@ -75,6 +75,10 @@ export default async function handler(
     // Get queue instance
     const boss = await getQueueInstance();
 
+    await boss.createQueue(JOB_TYPES.DELIVER_LEADS).catch(() => {
+      // Queue might already exist, ignore error
+    });
+
     // Get all users with settings
     const users = await prisma.user.findMany({
       include: {
