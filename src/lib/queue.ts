@@ -32,6 +32,7 @@ export async function closeQueue(): Promise<void> {
 // Job type definitions
 export const JOB_TYPES = {
   DELIVER_LEADS: "deliver-leads",
+  DELIVER_LEADS_BATCH: "deliver-leads-batch",
 } as const;
 
 export type JobType = (typeof JOB_TYPES)[keyof typeof JOB_TYPES];
@@ -40,4 +41,13 @@ export interface DeliverLeadsPayload {
   ingestedAt: string;
   runId: string;
   userId: string;
+}
+
+export interface DeliverLeadsBatchPayload {
+  ingestedAt: string;
+  runId: string;
+  userId: string;
+  batchIndex: number; // Which batch (0-indexed)
+  batchSize: number; // Properties per batch
+  totalBatches: number; // Total batches for this user
 }
