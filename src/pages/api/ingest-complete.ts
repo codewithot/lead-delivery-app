@@ -3,6 +3,8 @@ import { NextApiRequest, NextApiResponse } from "next";
 import { z } from "zod";
 import { PrismaClient, User, UserSettings } from "@prisma/client";
 import { getQueueInstance, JOB_TYPES, DeliverLeadsPayload } from "@/lib/queue";
+import { spawn } from "child_process";
+import path from "path";
 
 const prisma = new PrismaClient();
 
@@ -110,7 +112,6 @@ export default async function handler(
         expireInSeconds: 3600,
       });
 
-      // Check if jobId was created successfully
       if (!jobId) {
         console.error(`❌ Failed to create job for user ${user.id}`);
         return null;
@@ -119,7 +120,7 @@ export default async function handler(
       // Also create in database for tracking
       const job = await prisma.job.create({
         data: {
-          id: jobId, // Now TypeScript knows this is a string
+          id: jobId,
           type: JOB_TYPES.DELIVER_LEADS,
           payload: payload as any,
           userId: user.id,
@@ -136,10 +137,42 @@ export default async function handler(
 
     console.log(`🎉 Successfully queued ${successfulJobs.length} jobs`);
 
+    // 🚀 NEW: Spawn worker process as a detached child
+    console.log("\n🔥 Spawning worker process...\n");
+
+    try {
+      const workerScript = path.join(
+        process.cwd(),
+        "dist",
+        "workers",
+        "standalone.js"
+      );
+
+      // Spawn as detached process that will run independently
+      const workerProcess = spawn("node", [workerScript], {
+        detached: true,
+        stdio: "ignore", // Don't pipe stdio, let it run independently
+        env: {
+          ...process.env,
+          RUN_ID: validatedData.runId,
+          JOB_COUNT: String(successfulJobs.length),
+        },
+      });
+
+      // Unreference the child so parent can exit
+      workerProcess.unref();
+
+      console.log(`✅ Worker process spawned with PID: ${workerProcess.pid}\n`);
+    } catch (error) {
+      console.error("❌ Failed to spawn worker process:", error);
+      // Don't fail the webhook - jobs are queued and can be processed manually
+    }
+
+    // Return immediately - workers will run independently
     return res.status(200).json({
       success: true,
       runId: validatedData.runId,
-      message: "Webhook processed successfully",
+      message: "Webhook processed successfully and worker process spawned",
       jobsCreated: successfulJobs.length,
       totalUsers: users.length,
     });

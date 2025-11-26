@@ -1,6 +1,7 @@
 // src/workers/master.ts
 import { WorkerManager } from "../lib/workerManager";
 import { closeQueue, getQueueInstance, JOB_TYPES } from "../lib/queue";
+import { EventEmitter } from "events"; // <-- add this import
 
 const WORKER_COUNT = parseInt(process.env.WORKER_COUNT || "10", 10);
 
@@ -10,6 +11,9 @@ class MasterProcess {
 
   async start() {
     console.log(`🎯 Initializing worker system...\n`);
+
+    // create a shared event emitter for workers
+    const eventEmitter = new EventEmitter(); // <-- create emitter
 
     // Initialize queue and create the deliver-leads queue
     console.log("🔧 Setting up queue...");
@@ -26,7 +30,7 @@ class MasterProcess {
 
     // Create and start all workers
     for (let i = 1; i <= WORKER_COUNT; i++) {
-      const worker = new WorkerManager(i);
+      const worker = new WorkerManager(i, eventEmitter); // <-- pass emitter
       this.workers.push(worker);
       await worker.start();
     }
