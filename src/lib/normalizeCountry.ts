@@ -1,19 +1,3 @@
-// normalizeCountry.ts
-// Returns ISO 3166-1 alpha-2 codes (e.g. "US", "GB", "CA") or null if unknown.
-//
-// Optional dependency (recommended): i18n-iso-countries
-//   npm install i18n-iso-countries @types/i18n-iso-countries
-//
-// Usage:
-//   import { normalizeCountry, normalizeCountriesBulk } from "./normalizeCountry";
-//   console.log(normalizeCountry("United States")); // -> "US"
-//   console.log(normalizeCountry("USA")); // -> "US"
-//   console.log(normalizeCountry("England")); // -> "GB"
-//   // Bulk usage:
-//   const map = normalizeCountriesBulk(["usa","Usa","United States","Deutschland"]);
-//
-// The function is synchronous.
-
 interface CountriesLib {
   registerLocale(locale: any): void;
   isValid(code: string): boolean;
