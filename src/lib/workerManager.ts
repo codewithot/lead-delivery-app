@@ -3,6 +3,7 @@ import { getQueueInstance, JOB_TYPES, DeliverLeadsBatchPayload } from "./queue";
 import { PrismaClient, Job } from "@prisma/client";
 import { setupMemoryMonitoring } from "./monitoring";
 import { EventEmitter } from "events";
+import { updateJobProgress } from "./jobProgress";
 
 const prisma = new PrismaClient();
 
@@ -90,7 +91,7 @@ export class WorkerManager {
           }
 
           // Process the batch
-          await this.processBatch(job.data);
+          await this.processBatch(job.data, job.id);
 
           // Update database job status
           await prisma.job.update({
@@ -164,8 +165,8 @@ export class WorkerManager {
     console.log(`✅ Worker ${this.workerId} is now processing jobs`);
   }
 
-  private async processBatch(payload: DeliverLeadsBatchPayload) {
-    const { userId, batchIndex, batchSize } = payload;
+  private async processBatch(payload: DeliverLeadsBatchPayload, jobId: string) {
+    const { userId, batchIndex, batchSize, totalBatches } = payload;
 
     // Fetch user and settings
     const user = await prisma.user.findUnique({
@@ -196,24 +197,37 @@ export class WorkerManager {
     });
 
     console.log(
-      `📦 Worker ${this.workerId} processing batch ${batchIndex + 1}: ` +
+      `📦 Worker ${this.workerId} processing batch ${
+        batchIndex + 1
+      }/${totalBatches}: ` +
         `${properties.length} properties (offset: ${offset})`
     );
 
     // Process properties batch
-    await this.pushPropertiesBatch(properties, user);
+    await this.pushPropertiesBatch(properties, user, payload, jobId);
   }
 
-  private async pushPropertiesBatch(properties: any[], user: any) {
+  private async pushPropertiesBatch(
+    properties: any[],
+    user: any,
+    payload: DeliverLeadsBatchPayload,
+    jobId: string
+  ) {
     // Import your existing pushLeads logic here
-    // This should contain the actual GHL API calls and property processing
-    // For now, this is a placeholder that you'll replace with your actual logic
-
     const { pushLeadsForUser } = await import("./pushLeads");
+
+    // Update progress before processing
+    await updateJobProgress(jobId, {
+      processed: payload.batchIndex * payload.batchSize,
+      total: payload.totalBatches * payload.batchSize,
+      status: `Processing batch ${payload.batchIndex + 1}/${
+        payload.totalBatches
+      }`,
+    }).catch((e) => console.log("Failed to update progress:", e));
 
     // Create a synthetic job object for the batch
     const syntheticJob: Job = {
-      id: `batch-${this.workerId}-${Date.now()}`,
+      id: jobId,
       type: JOB_TYPES.DELIVER_LEADS_BATCH,
       payload: { userId: user.id, properties } as any,
       status: "in_progress",
@@ -229,6 +243,15 @@ export class WorkerManager {
 
     // Process the properties using your existing logic
     await pushLeadsForUser(syntheticJob);
+
+    // Update progress after processing
+    await updateJobProgress(jobId, {
+      processed: (payload.batchIndex + 1) * payload.batchSize,
+      total: payload.totalBatches * payload.batchSize,
+      status: `Completed batch ${payload.batchIndex + 1}/${
+        payload.totalBatches
+      }`,
+    }).catch((e) => console.log("Failed to update progress:", e));
   }
 
   async stop() {
