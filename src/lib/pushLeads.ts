@@ -22,6 +22,7 @@ import {
   findGhlContactByEmailOrPhone,
   findGhlPropertyByAddress,
 } from "./helper.ts";
+import { updateJobProgress } from "./jobProgress";
 
 const prisma = new PrismaClient();
 const GHL_BASE_URL = "https://services.leadconnectorhq.com";
@@ -97,6 +98,13 @@ export async function pushLeadsForUser(job: Job) {
     `🔍 Found ${properties.length} matching properties for job ${job.id}`
   );
 
+  // Initialize progress tracking
+  await updateJobProgress(job.id, {
+    processed: 0,
+    total: properties.length,
+    status: `Found ${properties.length} properties to push`,
+  }).catch((err) => console.warn("Progress update failed:", err));
+
   // ========================================================================
   // STEP 2: Identify unique contacts that need to be pushed
   // Only push contacts that own at least one property being pushed
@@ -124,6 +132,7 @@ export async function pushLeadsForUser(job: Job) {
     console.info(`========================================\n`);
 
     const contactIdMap: Record<number, string> = {};
+    let pushedContactCount = 0;
 
     // ========================================================================
     // STEP 3: Push contacts first
@@ -462,6 +471,14 @@ export async function pushLeadsForUser(job: Job) {
             `✓ [${account.name}] Pushed contact ID ${contact.id} (GHL: ${ghlContactId})`
           );
           contactIdMap[contact.id] = ghlContactId;
+
+          // ADD THIS: Track progress
+          pushedContactCount++;
+          await updateJobProgress(job.id, {
+            processed: pushedContactCount,
+            total: contactsToPush.size + properties.length,
+            status: `Pushed ${pushedContactCount}/${contactsToPush.size} contacts`,
+          }).catch((err) => console.warn("Progress update failed:", err));
         } else {
           console.error(
             `✖ [${account.name}] GHL responded ${resp.status} ${resp.statusText} for contact ${contact.id}`
@@ -709,6 +726,12 @@ export async function pushLeadsForUser(job: Job) {
 
           pushedPropertyCount++;
           console.info(`✔ Pushed property ID ${p.id} (GHL: ${ghlPropertyId})`);
+
+          await updateJobProgress(job.id, {
+            processed: contactsToPush.size + pushedPropertyCount,
+            total: contactsToPush.size + properties.length,
+            status: `Pushed ${pushedPropertyCount}/${properties.length} properties`,
+          }).catch((err) => console.warn("Progress update failed:", err));
 
           // Create association
           if (ghlPropertyId && ghlContactId) {

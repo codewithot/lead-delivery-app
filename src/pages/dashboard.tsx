@@ -3,9 +3,9 @@
 import { useSession, signOut } from "next-auth/react";
 import { useEffect } from "react";
 import { useRouter } from "next/router";
-import useSWR from "swr";
 import React from "react";
 import Link from "next/link";
+import useSWR, { mutate } from "swr";
 
 type Job = {
   id: string;
@@ -14,6 +14,11 @@ type Job = {
   lastError: string | null;
   createdAt: string;
   finishedAt: string | null;
+  progress?: {
+    processed: number;
+    total: number;
+    status: string;
+  } | null;
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -32,6 +37,24 @@ export default function DashboardPage() {
       router.replace("/auth/signin");
     }
   }, [session, status, router]);
+
+  // Auto-refresh when jobs are in progress
+  useEffect(() => {
+    if (!jobs) return;
+
+    const hasInProgressJobs = jobs.some(
+      (job) => job.status === "in_progress" || job.status === "pending"
+    );
+
+    if (hasInProgressJobs) {
+      const interval = setInterval(() => {
+        console.log("🔄 Refreshing jobs...");
+        mutate("/api/jobs");
+      }, 5000); // Refresh every 5 seconds
+
+      return () => clearInterval(interval);
+    }
+  }, [jobs, mutate]);
 
   if (status === "loading") {
     return (
@@ -147,6 +170,9 @@ export default function DashboardPage() {
                 <th className="border border-gray-400 px-4 py-3 text-left font-semibold">
                   Finished At
                 </th>
+                <th className="border border-gray-400 px-4 py-3 text-left font-semibold">
+                  Progress
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -186,6 +212,41 @@ export default function DashboardPage() {
                     {job.finishedAt
                       ? new Date(job.finishedAt).toLocaleString()
                       : "—"}
+                  </td>
+                  <td className="border border-gray-300 px-4 py-3">
+                    {job.progress ? (
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-xs mb-1">
+                          <span className="font-medium text-gray-700">
+                            {job.progress.processed} / {job.progress.total}
+                          </span>
+                          <span className="font-bold text-blue-600">
+                            {Math.round(
+                              (job.progress.processed / job.progress.total) *
+                                100
+                            )}
+                            %
+                          </span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2.5">
+                          <div
+                            className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                (job.progress.processed / job.progress.total) *
+                                  100
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                        <p className="text-xs text-gray-600 mt-1">
+                          {job.progress.status}
+                        </p>
+                      </div>
+                    ) : (
+                      <span className="text-gray-400 text-sm">—</span>
+                    )}
                   </td>
                 </tr>
               ))}

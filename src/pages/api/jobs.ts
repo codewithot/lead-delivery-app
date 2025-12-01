@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import { PrismaClient } from "@prisma/client";
+import { getJobProgress } from "@/lib/jobProgress";
 
 const prisma = new PrismaClient();
 
@@ -16,7 +17,6 @@ export default async function handler(
 
   try {
     const session = await getServerSession(req, res, authOptions);
-    console.log("Session in /api/jobs:", session);
 
     const userId = session?.user?.userId;
 
@@ -39,8 +39,18 @@ export default async function handler(
       orderBy: { createdAt: "desc" },
     });
 
-    console.log(`Found ${jobs.length} jobs for user ${userId}`);
-    return res.status(200).json(jobs);
+    const jobsWithProgress = await Promise.all(
+      jobs.map(async (job) => {
+        const progress = await getJobProgress(job.id);
+        return {
+          ...job,
+          progress: progress || null,
+        };
+      })
+    );
+
+    console.log(`Found ${jobsWithProgress.length} jobs for user ${userId}`);
+    return res.status(200).json(jobsWithProgress);
   } catch (error) {
     console.error("Error fetching jobs:", error);
     return res.status(500).json({ message: "Internal server error" });
