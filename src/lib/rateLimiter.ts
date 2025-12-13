@@ -11,8 +11,14 @@ const ghlLimiter = new Bottleneck({
 });
 
 // Track rate limiter stats
-ghlLimiter.on("failed", async (error, jobInfo) => {
-  const status = (error as any).response?.status;
+interface RateLimitError {
+  response?: {
+    status?: number;
+  };
+}
+
+ghlLimiter.on("failed", async (error) => {
+  const status = (error as RateLimitError).response?.status;
   if (status === 429) {
     // Rate limited - retry after delay
     console.warn(`⚠️ Rate limited, retrying in 60 seconds...`);

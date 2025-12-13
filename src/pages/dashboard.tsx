@@ -50,11 +50,11 @@ export default function DashboardPage() {
       const interval = setInterval(() => {
         console.log("🔄 Refreshing jobs...");
         mutate("/api/jobs");
-      }, 5000); // Refresh every 5 seconds
+      }, 5000);
 
       return () => clearInterval(interval);
     }
-  }, [jobs, mutate]);
+  }, [jobs]);
 
   if (status === "loading") {
     return (

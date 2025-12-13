@@ -280,3 +280,18 @@ model VerificationRequest {
   @@unique([identifier, token])
 }
 
+model JobIdempotency {
+  id              String    @id @default(cuid())
+  queueName       String
+  idempotencyKey  String
+  jobId           String
+  status          String    @default("processing")
+  result          Json?
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  @@unique([queueName, idempotencyKey])
+  @@index([queueName])
+  @@index([status])
+}
+

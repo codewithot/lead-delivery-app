@@ -1,6 +1,5 @@
 import { PrismaClient, type Job, type UserSettings } from "@prisma/client";
 import axios from "axios";
-import { normalizeCountry, normalizePostalCode } from "./normalizeCountry.ts";
 import { rateLimitedRequest } from "./rateLimiter";
 import {
   ensureContactPropertyAssociation,
@@ -21,7 +20,9 @@ import {
   normalizeLeadSource,
   findGhlContactByEmailOrPhone,
   findGhlPropertyByAddress,
-} from "./helper.ts";
+  normalizeCountry,
+  normalizePostalCode,
+} from "./helper";
 import { updateJobProgress } from "./jobProgress";
 
 const prisma = new PrismaClient();
@@ -182,13 +183,6 @@ export async function pushLeadsForUser(job: Job) {
         continue;
       }
 
-      let normalizedInPreforclosure: "True" | "False" | null = null;
-      if (property.inPreforclosure) {
-        const val = property.inPreforclosure.toLowerCase();
-        if (val === "yes") normalizedInPreforclosure = "True";
-        else if (val === "no") normalizedInPreforclosure = "False";
-      }
-
       let normalizedPool: "True" | "False" | null = null;
       if (property.pool) {
         const val = property.pool.toLowerCase();
@@ -196,9 +190,9 @@ export async function pushLeadsForUser(job: Job) {
         else if (val === "no" || val === "false") normalizedPool = "False";
       }
 
-      const tagsArray = buildTags(property.tags, (contact as any)?.tags);
+      const tagsArray = buildTags(property.tags, null);
 
-      const contactPayload: Record<string, any> = {
+      const contactPayload: Record<string, unknown> = {
         locationId: account.locationId,
         firstName: contact.firstName ?? undefined,
         lastName: contact.lastName ?? undefined,
@@ -484,20 +478,31 @@ export async function pushLeadsForUser(job: Job) {
             `✖ [${account.name}] GHL responded ${resp.status} ${resp.statusText} for contact ${contact.id}`
           );
         }
-      } catch (err: any) {
-        if (err.response) {
-          console.error(
-            `❌ [${account.name}] GHL Error for contact ID ${contact.id}:`,
-            {
-              status: err.response.status,
-              data: err.response.data,
-              headers: err.response.headers,
-            }
-          );
+      } catch (err: unknown) {
+        // Check if it's an Axios error with response data
+        if (axios.isAxiosError(err)) {
+          if (err.response) {
+            console.error(
+              `❌ [${account.name}] GHL Error for contact ID ${contact.id}:`,
+              {
+                status: err.response.status,
+                data: err.response.data,
+                headers: err.response.headers,
+              }
+            );
+          } else {
+            // Axios error but no response (network error, etc.)
+            console.error(
+              `❌ [${account.name}] Network error for contact ID ${contact.id}:`,
+              err.message
+            );
+          }
         } else {
+          // Not an Axios error
+          const errorMessage = err instanceof Error ? err.message : String(err);
           console.error(
             `❌ [${account.name}] Error pushing contact ID ${contact.id}:`,
-            err
+            errorMessage
           );
         }
       }
@@ -604,7 +609,7 @@ export async function pushLeadsForUser(job: Job) {
         continue;
       }
 
-      const customFields: Record<string, any> = {};
+      const customFields: Record<string, unknown> = {};
       const loanTypeKey = normalizeLoanType(p.loanType);
 
       const fieldMappings = {
@@ -758,20 +763,31 @@ export async function pushLeadsForUser(job: Job) {
             `✖ [${account.name}] GHL responded ${resp.status} ${resp.statusText} for property ${p.id}`
           );
         }
-      } catch (err: any) {
-        if (err.response) {
-          console.error(
-            `❌ [${account.name}] GHL Error for property ID ${p.id}:`,
-            {
-              status: err.response.status,
-              data: err.response.data,
-              headers: err.response.headers,
-            }
-          );
+      } catch (err: unknown) {
+        // Check if it's an Axios error
+        if (axios.isAxiosError(err)) {
+          if (err.response) {
+            console.error(
+              `❌ [${account.name}] GHL Error for property ID ${p.id}:`,
+              {
+                status: err.response.status,
+                data: err.response.data,
+                headers: err.response.headers,
+              }
+            );
+          } else {
+            // Network error or request setup error
+            console.error(
+              `❌ [${account.name}] Network error for property ID ${p.id}:`,
+              err.message
+            );
+          }
         } else {
+          // Not an Axios error (could be any other error)
+          const errorMessage = err instanceof Error ? err.message : String(err);
           console.error(
             `❌ [${account.name}] Error pushing property ID ${p.id}:`,
-            err
+            errorMessage
           );
         }
       }

@@ -1,9 +1,31 @@
-// src/lib/workerManager.ts
-import { getQueueInstance, JOB_TYPES, DeliverLeadsBatchPayload } from "./queue";
-import { PrismaClient, Job } from "@prisma/client";
+// src/lib/workerManager.ts - FULLY FIXED VERSION
+import {
+  getQueueInstance,
+  JOB_TYPES,
+  DeliverLeadsBatchPayload,
+  DailyLeadAssignmentPayload,
+  getTodayQueueName,
+} from "./queue";
+import {
+  PrismaClient,
+  Job,
+  Prisma,
+  Property,
+  User,
+  Contact,
+  UserSettings,
+} from "@prisma/client";
 import { setupMemoryMonitoring } from "./monitoring";
 import { EventEmitter } from "events";
 import { updateJobProgress } from "./jobProgress";
+import {
+  checkAndClaimIdempotency,
+  markIdempotencyCompleted,
+  markIdempotencyFailed,
+} from "./idempotency";
+import { pushLeadsForUser } from "./pushLeads";
+
+import * as PgBoss from "pg-boss";
 
 const prisma = new PrismaClient();
 
@@ -14,19 +36,33 @@ interface WorkerMetrics {
   averageProcessingTime: number;
 }
 
+interface WorkerConfig {
+  workerId: number;
+  queueName?: string;
+  useDailyQueue?: boolean;
+  concurrency?: number;
+}
+
 export class WorkerManager {
   private workerId: number;
   private isRunning: boolean = false;
   private activeJobs: number = 0;
   private eventEmitter: EventEmitter;
+  private queueName?: string;
+  private useDailyQueue: boolean;
+  private concurrency: number;
   private metrics = {
     jobsProcessed: 0,
     jobsFailed: 0,
     totalProcessingTime: 0,
   };
 
-  constructor(workerId: number, eventEmitter?: EventEmitter) {
-    this.workerId = workerId;
+  constructor(config: WorkerConfig, eventEmitter?: EventEmitter) {
+    this.workerId = config.workerId;
+    this.queueName = config.queueName;
+    this.useDailyQueue = config.useDailyQueue ?? false;
+    this.concurrency =
+      config.concurrency ?? parseInt(process.env.JOB_CONCURRENCY || "10", 10);
     this.eventEmitter = eventEmitter ?? new EventEmitter();
   }
 
@@ -37,138 +73,314 @@ export class WorkerManager {
     }
 
     console.log(`🚀 Worker ${this.workerId} starting...`);
+
+    const targetQueue = this.useDailyQueue
+      ? getTodayQueueName()
+      : this.queueName;
+
+    if (targetQueue) {
+      console.log(`   📍 Binding to queue: ${targetQueue}`);
+    } else {
+      console.log(`   📍 Binding to all queues`);
+    }
+
+    console.log(`   🔢 Concurrency: ${this.concurrency}`);
+
     this.isRunning = true;
 
-    // Setup memory monitoring
     setupMemoryMonitoring(this.workerId);
 
     const boss = await getQueueInstance();
 
-    // Subscribe to deliver-leads-batch jobs
     await boss.work<DeliverLeadsBatchPayload>(
       JOB_TYPES.DELIVER_LEADS_BATCH,
       async (jobs) => {
         const jobArray = Array.isArray(jobs) ? jobs : [jobs];
         const job = jobArray[0];
-
-        this.activeJobs++;
-        const startTime = Date.now();
-
-        console.log(
-          `👷 Worker ${this.workerId} processing job ${job.id} ` +
-            `(Batch ${job.data.batchIndex + 1}/${job.data.totalBatches}) ` +
-            `(Active: ${this.activeJobs})`
-        );
-
-        try {
-          // Try to find existing job or create it if it doesn't exist
-          const existingJob = await prisma.job.findUnique({
-            where: { id: job.id },
-          });
-
-          if (existingJob) {
-            await prisma.job.update({
-              where: { id: job.id },
-              data: {
-                status: "in_progress",
-                startedAt: new Date(),
-                attempts: { increment: 1 },
-              },
-            });
-          } else {
-            console.log(`ℹ️  Creating missing job record for ${job.id}`);
-            await prisma.job.create({
-              data: {
-                id: job.id,
-                type: job.name,
-                payload: job.data as any,
-                userId: job.data.userId,
-                status: "in_progress",
-                startedAt: new Date(),
-                attempts: 1,
-              },
-            });
-          }
-
-          // Process the batch
-          await this.processBatch(job.data, job.id);
-
-          // Update database job status
-          await prisma.job.update({
-            where: { id: job.id },
-            data: {
-              status: "completed",
-              finishedAt: new Date(),
-            },
-          });
-
-          const processingTime = Date.now() - startTime;
-          this.metrics.jobsProcessed++;
-          this.metrics.totalProcessingTime += processingTime;
-
-          console.log(
-            `✅ Worker ${this.workerId} completed job ${job.id} ` +
-              `in ${(processingTime / 1000).toFixed(2)}s`
-          );
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          console.error(
-            `❌ Worker ${this.workerId} failed job ${job.id}:`,
-            errorMessage
-          );
-
-          this.metrics.jobsFailed++;
-
-          // Update or create failed job status
-          await prisma.job
-            .upsert({
-              where: { id: job.id },
-              create: {
-                id: job.id,
-                type: job.name,
-                payload: job.data as any,
-                userId: job.data.userId,
-                status: "failed",
-                lastError: errorMessage,
-                attempts: 1,
-              },
-              update: {
-                status: "failed",
-                lastError: errorMessage,
-              },
-            })
-            .catch((e) => console.error("Failed to update job status:", e));
-
-          throw error;
-        } finally {
-          this.activeJobs--;
-
-          // Emit event with metrics
-          this.eventEmitter.emit("jobCompleted", {
-            workerId: this.workerId,
-            activeJobs: this.activeJobs,
-            metrics: this.getMetrics(),
-          });
-
-          console.log(
-            `📊 Worker ${this.workerId} - ` +
-              `Active: ${this.activeJobs} | ` +
-              `Processed: ${this.metrics.jobsProcessed} | ` +
-              `Failed: ${this.metrics.jobsFailed} | ` +
-              `Avg Time: ${this.getMetrics().averageProcessingTime.toFixed(2)}s`
-          );
-        }
+        await this.processBatchJob(job);
       }
     );
 
+    if (this.useDailyQueue || targetQueue) {
+      const queueToSubscribe = targetQueue || getTodayQueueName();
+
+      await boss.work<DailyLeadAssignmentPayload>(
+        queueToSubscribe,
+        async (jobs) => {
+          const jobArray = Array.isArray(jobs) ? jobs : [jobs];
+          const job = jobArray[0];
+          await this.processDailyLeadJob(job);
+        }
+      );
+
+      console.log(
+        `✅ Worker ${this.workerId} subscribed to: ${queueToSubscribe}`
+      );
+    }
+
+    console.log(
+      `ℹ️  Worker ${this.workerId} using default pg-boss concurrency`
+    );
+    console.log(`   Concurrency is controlled by total number of workers`);
     console.log(`✅ Worker ${this.workerId} is now processing jobs`);
+  }
+
+  private async processDailyLeadJob(
+    job: PgBoss.Job<DailyLeadAssignmentPayload>
+  ) {
+    this.activeJobs++;
+    const startTime = Date.now();
+    const payload: DailyLeadAssignmentPayload = job.data;
+
+    console.log(
+      `👷 Worker ${this.workerId} processing daily lead job ${job.id} ` +
+        `(Contact: ${payload.contactId}, Properties: ${payload.propertyIds.length}) ` +
+        `(Active: ${this.activeJobs})`
+    );
+
+    try {
+      const queueName = this.useDailyQueue ? getTodayQueueName() : job.name;
+      const idempotencyCheck = await checkAndClaimIdempotency(
+        queueName,
+        payload.idempotencyKey,
+        job.id
+      );
+
+      if (!idempotencyCheck.shouldProcess) {
+        console.log(
+          `⏩ Skipping job ${job.id} - already processed (idempotency)`
+        );
+        return;
+      }
+
+      const existingJob = await prisma.job.findUnique({
+        where: { id: job.id },
+      });
+
+      if (existingJob) {
+        await prisma.job.update({
+          where: { id: job.id },
+          data: {
+            status: "in_progress",
+            startedAt: new Date(),
+            attempts: { increment: 1 },
+          },
+        });
+      } else {
+        await prisma.job.create({
+          data: {
+            id: job.id,
+            type: job.name,
+            payload: job.data as unknown as Prisma.InputJsonValue,
+            userId: payload.userId,
+            status: "in_progress",
+            startedAt: new Date(),
+            attempts: 1,
+          },
+        });
+      }
+
+      const contact = await prisma.contact.findUnique({
+        where: { id: payload.contactId },
+      });
+
+      const properties = await prisma.property.findMany({
+        where: { id: { in: payload.propertyIds } },
+        include: { owner: true },
+      });
+
+      if (!contact) {
+        throw new Error(`Contact ${payload.contactId} not found`);
+      }
+
+      if (properties.length === 0) {
+        throw new Error(
+          `No properties found for IDs: ${payload.propertyIds.join(", ")}`
+        );
+      }
+
+      console.log(
+        `   📦 Processing ${properties.length} properties for contact ${contact.id}`
+      );
+
+      const syntheticJob: Job = {
+        id: job.id,
+        type: job.name,
+        payload: {
+          userId: payload.userId,
+          properties,
+          contact,
+        } as unknown as Prisma.JsonValue,
+        status: "in_progress",
+        attempts: 0,
+        maxAttempts: 3,
+        lastError: null,
+        createdAt: new Date(),
+        startedAt: new Date(),
+        finishedAt: null,
+        updatedAt: new Date(),
+        userId: payload.userId,
+      };
+
+      await pushLeadsForUser(syntheticJob);
+
+      await prisma.job.update({
+        where: { id: job.id },
+        data: {
+          status: "completed",
+          finishedAt: new Date(),
+        },
+      });
+
+      await markIdempotencyCompleted(queueName, payload.idempotencyKey, {
+        jobId: job.id,
+        contactId: payload.contactId,
+        propertiesProcessed: properties.length,
+      });
+
+      const processingTime = Date.now() - startTime;
+      this.metrics.jobsProcessed++;
+      this.metrics.totalProcessingTime += processingTime;
+
+      console.log(
+        `✅ Worker ${this.workerId} completed job ${job.id} ` +
+          `in ${(processingTime / 1000).toFixed(2)}s`
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      console.error(
+        `❌ Worker ${this.workerId} failed job ${job.id}:`,
+        errorMessage
+      );
+
+      this.metrics.jobsFailed++;
+
+      const queueName = this.useDailyQueue ? getTodayQueueName() : job.name;
+      await markIdempotencyFailed(queueName, payload.idempotencyKey, error);
+
+      await prisma.job
+        .upsert({
+          where: { id: job.id },
+          create: {
+            id: job.id,
+            type: job.name,
+            payload: job.data as unknown as Prisma.InputJsonValue,
+            userId: payload.userId,
+            status: "failed",
+            lastError: errorMessage,
+            attempts: 1,
+          },
+          update: {
+            status: "failed",
+            lastError: errorMessage,
+          },
+        })
+        .catch((e) => console.error("Failed to update job status:", e));
+
+      throw error;
+    } finally {
+      this.activeJobs--;
+      this.emitMetrics();
+    }
+  }
+
+  private async processBatchJob(job: PgBoss.Job<DeliverLeadsBatchPayload>) {
+    this.activeJobs++;
+    const startTime = Date.now();
+    const payload: DeliverLeadsBatchPayload = job.data;
+
+    console.log(
+      `👷 Worker ${this.workerId} processing batch job ${job.id} ` +
+        `(Batch ${payload.batchIndex + 1}/${payload.totalBatches}) ` +
+        `(Active: ${this.activeJobs})`
+    );
+
+    try {
+      const existingJob = await prisma.job.findUnique({
+        where: { id: job.id },
+      });
+
+      if (existingJob) {
+        await prisma.job.update({
+          where: { id: job.id },
+          data: {
+            status: "in_progress",
+            startedAt: new Date(),
+            attempts: { increment: 1 },
+          },
+        });
+      } else {
+        await prisma.job.create({
+          data: {
+            id: job.id,
+            type: job.name,
+            payload: job.data as unknown as Prisma.InputJsonValue,
+            userId: payload.userId,
+            status: "in_progress",
+            startedAt: new Date(),
+            attempts: 1,
+          },
+        });
+      }
+
+      await this.processBatch(payload, job.id);
+
+      await prisma.job.update({
+        where: { id: job.id },
+        data: {
+          status: "completed",
+          finishedAt: new Date(),
+        },
+      });
+
+      const processingTime = Date.now() - startTime;
+      this.metrics.jobsProcessed++;
+      this.metrics.totalProcessingTime += processingTime;
+
+      console.log(
+        `✅ Worker ${this.workerId} completed batch job ${job.id} ` +
+          `in ${(processingTime / 1000).toFixed(2)}s`
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      console.error(
+        `❌ Worker ${this.workerId} failed batch job ${job.id}:`,
+        errorMessage
+      );
+
+      this.metrics.jobsFailed++;
+
+      await prisma.job
+        .upsert({
+          where: { id: job.id },
+          create: {
+            id: job.id,
+            type: job.name,
+            payload: job.data as unknown as Prisma.InputJsonValue,
+            userId: payload.userId,
+            status: "failed",
+            lastError: errorMessage,
+            attempts: 1,
+          },
+          update: {
+            status: "failed",
+            lastError: errorMessage,
+          },
+        })
+        .catch((e) => console.error("Failed to update job status:", e));
+
+      throw error;
+    } finally {
+      this.activeJobs--;
+      this.emitMetrics();
+    }
   }
 
   private async processBatch(payload: DeliverLeadsBatchPayload, jobId: string) {
     const { userId, batchIndex, batchSize, totalBatches } = payload;
 
-    // Fetch user and settings
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: { settings: true },
@@ -178,10 +390,8 @@ export class WorkerManager {
       throw new Error("User or settings not found");
     }
 
-    // Calculate offset for this batch
     const offset = batchIndex * batchSize;
 
-    // Fetch only the properties for this batch
     const properties = await prisma.property.findMany({
       where: {
         price: {
@@ -203,20 +413,15 @@ export class WorkerManager {
         `${properties.length} properties (offset: ${offset})`
     );
 
-    // Process properties batch
     await this.pushPropertiesBatch(properties, user, payload, jobId);
   }
 
   private async pushPropertiesBatch(
-    properties: any[],
-    user: any,
+    properties: (Property & { owner: Contact | null })[],
+    user: User & { settings: UserSettings | null },
     payload: DeliverLeadsBatchPayload,
     jobId: string
   ) {
-    // Import your existing pushLeads logic here
-    const { pushLeadsForUser } = await import("./pushLeads");
-
-    // Update progress before processing
     await updateJobProgress(jobId, {
       processed: payload.batchIndex * payload.batchSize,
       total: payload.totalBatches * payload.batchSize,
@@ -225,11 +430,13 @@ export class WorkerManager {
       }`,
     }).catch((e) => console.log("Failed to update progress:", e));
 
-    // Create a synthetic job object for the batch
     const syntheticJob: Job = {
       id: jobId,
       type: JOB_TYPES.DELIVER_LEADS_BATCH,
-      payload: { userId: user.id, properties } as any,
+      payload: {
+        userId: user.id,
+        properties,
+      } as unknown as Prisma.JsonValue,
       status: "in_progress",
       attempts: 0,
       maxAttempts: 3,
@@ -241,10 +448,8 @@ export class WorkerManager {
       userId: user.id,
     };
 
-    // Process the properties using your existing logic
     await pushLeadsForUser(syntheticJob);
 
-    // Update progress after processing
     await updateJobProgress(jobId, {
       processed: (payload.batchIndex + 1) * payload.batchSize,
       total: payload.totalBatches * payload.batchSize,
@@ -252,6 +457,22 @@ export class WorkerManager {
         payload.totalBatches
       }`,
     }).catch((e) => console.log("Failed to update progress:", e));
+  }
+
+  private emitMetrics() {
+    this.eventEmitter.emit("jobCompleted", {
+      workerId: this.workerId,
+      activeJobs: this.activeJobs,
+      metrics: this.getMetrics(),
+    });
+
+    console.log(
+      `📊 Worker ${this.workerId} - ` +
+        `Active: ${this.activeJobs} | ` +
+        `Processed: ${this.metrics.jobsProcessed} | ` +
+        `Failed: ${this.metrics.jobsFailed} | ` +
+        `Avg Time: ${this.getMetrics().averageProcessingTime.toFixed(2)}s`
+    );
   }
 
   async stop() {
@@ -262,8 +483,7 @@ export class WorkerManager {
     console.log(`🛑 Worker ${this.workerId} stopping...`);
     this.isRunning = false;
 
-    // Wait for active jobs to complete (with timeout)
-    const timeout = 30000; // 30 seconds
+    const timeout = 30000;
     const startTime = Date.now();
 
     while (this.activeJobs > 0 && Date.now() - startTime < timeout) {
@@ -281,7 +501,6 @@ export class WorkerManager {
       console.log(`✅ Worker ${this.workerId} stopped cleanly`);
     }
 
-    // Log final metrics
     console.log(
       `📊 Final metrics for Worker ${this.workerId}:`,
       this.getMetrics()
@@ -293,6 +512,8 @@ export class WorkerManager {
       workerId: this.workerId,
       isRunning: this.isRunning,
       activeJobs: this.activeJobs,
+      queueName: this.queueName,
+      useDailyQueue: this.useDailyQueue,
       metrics: this.getMetrics(),
     };
   }

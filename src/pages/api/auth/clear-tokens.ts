@@ -1,8 +1,9 @@
-// pages/api/auth/clear-tokens.ts
-import { getServerSession } from "next-auth";
-import { authOptions } from "./[...nextauth]";
+import { NextApiRequest, NextApiResponse } from "next";
 
-export default async function handler(req: any, res: any) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }

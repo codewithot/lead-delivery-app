@@ -1,7 +1,6 @@
 // src/pages/auth/signin.tsx
 import { GetServerSideProps } from "next";
 import { getSession, signIn } from "next-auth/react";
-import { useRouter } from "next/router";
 
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const session = await getSession(ctx);

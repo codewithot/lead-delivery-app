@@ -1,7 +1,7 @@
 // src/workers/master.ts
 import { WorkerManager } from "../lib/workerManager";
 import { closeQueue, getQueueInstance, JOB_TYPES } from "../lib/queue";
-import { EventEmitter } from "events"; // <-- add this import
+import { EventEmitter } from "events";
 
 const WORKER_COUNT = parseInt(process.env.WORKER_COUNT || "10", 10);
 
@@ -22,7 +22,7 @@ class MasterProcess {
     try {
       await boss.createQueue(JOB_TYPES.DELIVER_LEADS);
       console.log("✅ Queue created successfully\n");
-    } catch (error) {
+    } catch {
       console.log("ℹ️  Queue already exists or creation skipped\n");
     }
 
@@ -30,7 +30,14 @@ class MasterProcess {
 
     // Create and start all workers
     for (let i = 1; i <= WORKER_COUNT; i++) {
-      const worker = new WorkerManager(i, eventEmitter); // <-- pass emitter
+      const worker = new WorkerManager(
+        {
+          workerId: i,
+          useDailyQueue: true, // Enable daily queue feature
+          concurrency: parseInt(process.env.JOB_CONCURRENCY || "10", 10),
+        },
+        eventEmitter
+      );
       this.workers.push(worker);
       await worker.start();
     }

@@ -1,7 +1,14 @@
 // src/pages/api/auth/[...nextauth].ts
-import NextAuth, { NextAuthOptions, Profile } from "next-auth";
+import NextAuth, {
+  NextAuthOptions,
+  Profile,
+  Session,
+  User,
+  Account,
+} from "next-auth";
+import { JWT } from "next-auth/jwt";
 import { PrismaClient } from "@prisma/client";
-import { encode } from "next-auth/jwt";
+import { TokenSet } from "next-auth/core/types";
 
 // --- Module Augmentations -------------------------------------------------
 declare module "next-auth" {
@@ -30,6 +37,28 @@ declare module "next-auth/jwt" {
     email?: string;
     error?: string;
   }
+}
+
+// --- Type Definitions ------------------------------------------------------
+interface GHLTokenResponse extends TokenSet {
+  access_token: string;
+  refresh_token?: string;
+  expires_in: number;
+  token_type?: string;
+  scope?: string;
+  userId: string;
+  locationId?: string;
+  companyId?: string;
+}
+
+interface GHLUserInfo {
+  name?: string;
+  email?: string;
+}
+
+interface ExtendedProfile extends Profile {
+  locationId?: string;
+  companyId?: string;
 }
 
 // --- Config & Client -------------------------------------------------------
@@ -92,9 +121,12 @@ export const authOptions: NextAuthOptions = {
         },
       },
       userinfo: {
-        async request({ tokens }: { tokens: any }): Promise<Profile> {
-          const accessToken = tokens.access_token as string;
-          const userId = tokens.userId as string;
+        async request(context): Promise<Profile> {
+          // Access tokens from context and cast to our extended type
+          const tokens = context.tokens as unknown as GHLTokenResponse;
+          const accessToken = tokens.access_token;
+          const userId = tokens.userId;
+
           if (!accessToken || !userId) {
             console.error("[userinfo] Missing credentials:", {
               accessToken,
@@ -119,40 +151,56 @@ export const authOptions: NextAuthOptions = {
             throw new Error(`Bad response: ${res.status}`);
           }
 
-          let json: any;
+          let json: GHLUserInfo;
           try {
             json = JSON.parse(text);
           } catch (err) {
-            console.error("[userinfo] JSON.parse failed:", text);
+            const errorMessage =
+              err instanceof Error ? err.message : String(err);
+            console.error("[userinfo] JSON.parse failed:", text, errorMessage);
             throw err;
           }
           console.log("[userinfo] Parsed JSON:", json);
 
-          // Explicitly cast to Profile so TS knows the shape matches
-          const profile: Profile = {
+          // Return profile with additional metadata
+          const profile: ExtendedProfile = {
             id: userId,
             name: (json.name as string) ?? `User ${userId}`,
             email: (json.email as string) ?? undefined,
             image: undefined,
+            locationId: tokens.locationId,
+            companyId: tokens.companyId,
           };
           return profile;
         },
       },
       clientId: process.env.GHL_CLIENT_ID!,
       clientSecret: process.env.GHL_CLIENT_SECRET!,
-      profile(profile: any, tokens: any) {
+      profile(profile, tokens) {
+        // Cast tokens to access custom properties
+        const ghlTokens = tokens as unknown as GHLTokenResponse;
+        const extendedProfile = profile as ExtendedProfile;
+
         return {
           id: profile.id,
           name: profile.name,
           email: profile.email ?? undefined,
-          locationId: tokens.locationId,
-          companyId: tokens.companyId,
+          locationId: extendedProfile.locationId ?? ghlTokens.locationId,
+          companyId: extendedProfile.companyId ?? ghlTokens.companyId,
         };
       },
     },
   ],
   callbacks: {
-    async jwt({ token, account, user }) {
+    async jwt({
+      token,
+      account,
+      user,
+    }: {
+      token: JWT;
+      account: Account | null;
+      user?: User;
+    }) {
       if (account && user) {
         console.log("[jwt] account:", account);
         console.log("[jwt] user:", user);
@@ -187,20 +235,17 @@ export const authOptions: NextAuthOptions = {
           });
           console.log("[jwt] ✅ upserted user:", upserted);
         } catch (e) {
-          console.error("[jwt] ❌ upsert error:", e);
+          const errorMessage = e instanceof Error ? e.message : String(e);
+          console.error("[jwt] ❌ upsert error:", errorMessage);
         }
         token.sub = user.id;
         token.userId = user.id;
         token.email = user.email ?? undefined;
       }
-      const encoded = await encode({
-        token,
-        secret: process.env.NEXTAUTH_SECRET!,
-      });
       return token;
     },
 
-    async session({ session, token }) {
+    async session({ session, token }: { session: Session; token: JWT }) {
       console.log("[session] JWT token:", token);
       session.user = {
         ...session.user,
@@ -211,11 +256,13 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
 
-    async redirect({ url, baseUrl }) {
+    async redirect({ url, baseUrl }: { url: string; baseUrl: string }) {
       if (url.startsWith("/")) return baseUrl + url;
       try {
         if (new URL(url).origin === baseUrl) return url;
-      } catch {}
+      } catch {
+        // Invalid URL, return baseUrl
+      }
       return baseUrl;
     },
   },

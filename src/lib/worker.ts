@@ -1,6 +1,5 @@
-import cron from "node-cron";
-import { PrismaClient, type Job } from "@prisma/client";
-import { pushLeadsForUser } from "./pushLeads.ts";
+import { PrismaClient } from "@prisma/client";
+import { pushLeadsForUser } from "./pushLeads";
 
 const prisma = new PrismaClient();
 
@@ -44,20 +43,23 @@ async function runWorker() {
         data: { status: "completed", finishedAt: new Date() },
       });
       console.log(`✅ Job ${job.id} completed`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // 5) On error, increment attempts & decide next status
       const nextAttempts = job.attempts + 1;
       const nextStatus = nextAttempts >= job.maxAttempts ? "failed" : "pending";
+
+      // Safely extract error message
+      const errorMessage = err instanceof Error ? err.message : String(err);
 
       await prisma.job.update({
         where: { id: job.id },
         data: {
           attempts: nextAttempts,
           status: nextStatus,
-          lastError: err.message,
+          lastError: errorMessage,
         },
       });
-      console.error(`❌ Job ${job.id} failed:`, err.message);
+      console.error(`❌ Job ${job.id} failed:`, errorMessage);
     }
   }
 }

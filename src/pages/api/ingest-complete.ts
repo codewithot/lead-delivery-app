@@ -1,7 +1,7 @@
 // src/pages/api/ingest-complete.ts
 import { NextApiRequest, NextApiResponse } from "next";
 import { z } from "zod";
-import { PrismaClient, User, UserSettings } from "@prisma/client";
+import { PrismaClient, Prisma } from "@prisma/client";
 import {
   getQueueInstance,
   JOB_TYPES,
@@ -11,10 +11,6 @@ import { spawn } from "child_process";
 import path from "path";
 
 const prisma = new PrismaClient();
-
-type UserWithSettings = User & {
-  settings: UserSettings | null;
-};
 
 const webhookSchema = z.object({
   runId: z.union([z.string(), z.number()]).transform((val) => String(val)),
@@ -58,14 +54,16 @@ export default async function handler(
         data: {
           direction: "incoming",
           url: req.url!,
-          payload: req.body,
-          headers: req.headers as any,
+          payload: req.body as Prisma.InputJsonValue,
+          headers: req.headers as Prisma.InputJsonValue,
           receivedAt: new Date(),
         },
       });
       console.log("✅ Webhook logged successfully");
     } catch (logError) {
-      console.error("⚠️ Failed to log webhook:", logError);
+      const logErrorMessage =
+        logError instanceof Error ? logError.message : String(logError);
+      console.error("⚠️ Failed to log webhook:", logErrorMessage);
     }
 
     // Validate payload
@@ -74,7 +72,9 @@ export default async function handler(
       validatedData = webhookSchema.parse(body);
       console.log("✅ Payload validated:", validatedData);
     } catch (error) {
-      console.error("❌ Validation failed:", error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      console.error("❌ Validation failed:", errorMessage);
       return res.status(400).json({
         error: "Invalid payload format",
         details: error instanceof Error ? error.message : "Validation failed",
@@ -164,11 +164,14 @@ export default async function handler(
         }
 
         // Create in database for tracking
+        // Create in database for tracking
         await prisma.job.create({
           data: {
             id: jobId,
             type: JOB_TYPES.DELIVER_LEADS_BATCH,
-            payload: payload as any,
+            payload: JSON.parse(
+              JSON.stringify(payload)
+            ) as Prisma.InputJsonValue,
             userId: user.id,
             status: "pending",
           },
@@ -216,7 +219,9 @@ export default async function handler(
           `✅ Worker process spawned with PID: ${workerProcess.pid}\n`
         );
       } catch (error) {
-        console.error("❌ Failed to spawn worker process:", error);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        console.error("❌ Failed to spawn worker process:", errorMessage);
         // Don't fail the webhook - jobs are queued
       }
     } else {
@@ -233,7 +238,8 @@ export default async function handler(
       batchSize: PROPERTIES_PER_BATCH,
     });
   } catch (error) {
-    console.error("💥 Unexpected error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error("💥 Unexpected error:", errorMessage);
     return res.status(500).json({
       error: "Internal server error",
       details: error instanceof Error ? error.message : "Unknown error",

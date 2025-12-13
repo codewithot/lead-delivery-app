@@ -1,5 +1,5 @@
 // src/lib/jobProgress.ts
-import { PrismaClient, Job } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
@@ -19,7 +19,7 @@ export async function updateJobProgress(
   }
 
   // Safely merge progress into payload
-  const currentPayload = (job.payload as Record<string, any>) || {};
+  const currentPayload = (job.payload as Record<string, unknown>) || {};
   const updatedPayload = {
     ...currentPayload,
     progress,
@@ -41,7 +41,7 @@ export async function getJobProgress(jobId: string) {
     return null;
   }
 
-  const payload = (job.payload as Record<string, any>) || {};
+  const payload = (job.payload as Record<string, unknown>) || {};
   return payload.progress || null;
 }
 

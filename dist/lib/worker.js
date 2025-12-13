@@ -1,0 +1,64 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const client_1 = require("@prisma/client");
+const pushLeads_1 = require("./pushLeads");
+const prisma = new client_1.PrismaClient();
+// Main worker logic as a function
+async function runWorker() {
+    console.log("⏱  Worker tick:", new Date().toISOString());
+    // 1) Fetch up to 5 pending jobs
+    const jobs = await prisma.job.findMany({
+        where: { status: "pending" },
+        orderBy: { createdAt: "asc" },
+        take: 5,
+    });
+    for (const job of jobs) {
+        // Skip if already reached maxAttempts
+        if (job.attempts >= job.maxAttempts)
+            continue;
+        // 2) Atomically claim this job
+        const updated = await prisma.job.updateMany({
+            where: {
+                id: job.id,
+                status: "pending",
+                attempts: job.attempts,
+            },
+            data: {
+                status: "in_progress",
+                startedAt: new Date(),
+            },
+        });
+        if (updated.count === 0)
+            continue; // someone else claimed it
+        try {
+            // 3) Process it
+            await (0, pushLeads_1.pushLeadsForUser)(job);
+            // 4) Mark success
+            await prisma.job.update({
+                where: { id: job.id },
+                data: { status: "completed", finishedAt: new Date() },
+            });
+            console.log(`✅ Job ${job.id} completed`);
+        }
+        catch (err) {
+            // 5) On error, increment attempts & decide next status
+            const nextAttempts = job.attempts + 1;
+            const nextStatus = nextAttempts >= job.maxAttempts ? "failed" : "pending";
+            // Safely extract error message
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            await prisma.job.update({
+                where: { id: job.id },
+                data: {
+                    attempts: nextAttempts,
+                    status: nextStatus,
+                    lastError: errorMessage,
+                },
+            });
+            console.error(`❌ Job ${job.id} failed:`, errorMessage);
+        }
+    }
+}
+// Run immediately when script starts
+runWorker();
+// Schedule to run every minute
+// cron.schedule("* * * * *", runWorker);

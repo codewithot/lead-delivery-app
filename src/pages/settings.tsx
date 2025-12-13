@@ -1,7 +1,7 @@
 // src/pages/settings.tsx
 import { GetServerSideProps } from "next";
-import { getSession, useSession } from "next-auth/react";
-import { useEffect, useState } from "react";
+import { getSession } from "next-auth/react";
+import { useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
 import { useRouter } from "next/router";
@@ -24,7 +24,6 @@ const fetcher = async (url: string) => {
 };
 
 export default function SettingsPage() {
-  const { data: session } = useSession();
   const router = useRouter();
 
   const [zip, setZip] = useState("");
