@@ -61,6 +61,12 @@ interface ExtendedProfile extends Profile {
   companyId?: string;
 }
 
+// ← CHANGE 1: Add extended Account type to access custom fields
+interface ExtendedAccount extends Account {
+  locationId?: string;
+  companyId?: string;
+}
+
 // --- Config & Client -------------------------------------------------------
 const prisma = new PrismaClient();
 const TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token";
@@ -202,13 +208,19 @@ export const authOptions: NextAuthOptions = {
       user?: User;
     }) {
       if (account && user) {
+        // ← CHANGE 2: Cast account to access locationId and companyId
+        const extendedAccount = account as ExtendedAccount;
+
         console.log("[jwt] account:", account);
         console.log("[jwt] user:", user);
         console.log("[jwt] ▶ about to upsert user:", {
           id: user.id,
           name: user.name,
           email: user.email,
+          locationId: extendedAccount.locationId, // ← CHANGE 3: Log locationId
+          companyId: extendedAccount.companyId, // ← CHANGE 4: Log companyId
         });
+
         try {
           const upserted = await prisma.user.upsert({
             where: { id: user.id },
@@ -221,9 +233,10 @@ export const authOptions: NextAuthOptions = {
               tokenExpiresAt: account.expires_at
                 ? new Date(account.expires_at * 1000)
                 : undefined,
+              locationId: extendedAccount.locationId, // ← CHANGE 5: Save locationId
+              companyId: extendedAccount.companyId, // ← CHANGE 6: Save companyId
             },
             update: {
-              // ← add name & email here as well:
               name: user.name!,
               email: user.email!,
               accessToken: account.access_token,
@@ -231,6 +244,8 @@ export const authOptions: NextAuthOptions = {
               tokenExpiresAt: account.expires_at
                 ? new Date(account.expires_at * 1000)
                 : undefined,
+              locationId: extendedAccount.locationId, // ← CHANGE 7: Update locationId
+              companyId: extendedAccount.companyId, // ← CHANGE 8: Update companyId
             },
           });
           console.log("[jwt] ✅ upserted user:", upserted);
