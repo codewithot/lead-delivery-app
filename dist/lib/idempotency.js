@@ -1,14 +1,7 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.checkAndClaimIdempotency = checkAndClaimIdempotency;
-exports.markIdempotencyCompleted = markIdempotencyCompleted;
-exports.markIdempotencyFailed = markIdempotencyFailed;
-exports.generateIdempotencyKey = generateIdempotencyKey;
-exports.cleanupOldIdempotencyRecords = cleanupOldIdempotencyRecords;
 // src/lib/idempotency.ts
-const client_1 = require("@prisma/client");
-const client_2 = require("@prisma/client");
-const prisma = new client_1.PrismaClient();
+import { PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+const prisma = new PrismaClient();
 /**
  * Check if a job with this idempotency key has already been processed
  * If not, claim it atomically
@@ -18,7 +11,7 @@ const prisma = new client_1.PrismaClient();
  * @param jobId - Current job ID attempting to process
  * @returns Result indicating whether to process and any existing results
  */
-async function checkAndClaimIdempotency(queueName, idempotencyKey, jobId) {
+export async function checkAndClaimIdempotency(queueName, idempotencyKey, jobId) {
     try {
         // Try to create a new idempotency record
         await prisma.jobIdempotency.create({
@@ -34,7 +27,7 @@ async function checkAndClaimIdempotency(queueName, idempotencyKey, jobId) {
     }
     catch (error) {
         // Check if it's a Prisma error
-        if (error instanceof client_2.Prisma.PrismaClientKnownRequestError) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError) {
             // If unique constraint fails, job already exists
             if (error.code === "P2002") {
                 console.log(`⚠️ Idempotency key already exists: ${idempotencyKey}`);
@@ -76,7 +69,7 @@ async function checkAndClaimIdempotency(queueName, idempotencyKey, jobId) {
 /**
  * Mark an idempotency record as completed
  */
-async function markIdempotencyCompleted(queueName, idempotencyKey, result) {
+export async function markIdempotencyCompleted(queueName, idempotencyKey, result) {
     try {
         await prisma.jobIdempotency.update({
             where: {
@@ -90,7 +83,7 @@ async function markIdempotencyCompleted(queueName, idempotencyKey, result) {
                 completedAt: new Date(),
                 result: result !== undefined
                     ? result
-                    : client_2.Prisma.JsonNull, // ✅ Use Prisma.JsonNull instead of null
+                    : Prisma.JsonNull, // ✅ Use Prisma.JsonNull instead of null
             },
         });
         console.log(`✅ Marked idempotency completed: ${idempotencyKey}`);
@@ -102,7 +95,7 @@ async function markIdempotencyCompleted(queueName, idempotencyKey, result) {
 /**
  * Mark an idempotency record as failed
  */
-async function markIdempotencyFailed(queueName, idempotencyKey, error) {
+export async function markIdempotencyFailed(queueName, idempotencyKey, error) {
     try {
         await prisma.jobIdempotency.update({
             where: {
@@ -129,14 +122,14 @@ async function markIdempotencyFailed(queueName, idempotencyKey, error) {
  * Generate idempotency key for a contact/property
  * Format: {type}-{id}:{YYYYMMDD}
  */
-function generateIdempotencyKey(type, id, date) {
+export function generateIdempotencyKey(type, id, date) {
     return `${type}-${id}:${date}`;
 }
 /**
  * Clean up old idempotency records (optional maintenance task)
  * Keep records for N days, then delete
  */
-async function cleanupOldIdempotencyRecords(daysToKeep = 30) {
+export async function cleanupOldIdempotencyRecords(daysToKeep = 30) {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
     const result = await prisma.jobIdempotency.deleteMany({

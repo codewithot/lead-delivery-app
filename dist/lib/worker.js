@@ -1,8 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-const client_1 = require("@prisma/client");
-const pushLeads_1 = require("./pushLeads");
-const prisma = new client_1.PrismaClient();
+import { PrismaClient } from "@prisma/client";
+import { pushLeadsForUser } from "./pushLeads";
+const prisma = new PrismaClient();
 // Main worker logic as a function
 async function runWorker() {
     console.log("⏱  Worker tick:", new Date().toISOString());
@@ -32,7 +30,7 @@ async function runWorker() {
             continue; // someone else claimed it
         try {
             // 3) Process it
-            await (0, pushLeads_1.pushLeadsForUser)(job);
+            await pushLeadsForUser(job);
             // 4) Mark success
             await prisma.job.update({
                 where: { id: job.id },

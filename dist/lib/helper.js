@@ -1,33 +1,8 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.parkingMapping = exports.normalizeLoanType = exports.normalizeYesNo = exports.toFloat = exports.toNumber = void 0;
-exports.normalizeCountry = normalizeCountry;
-exports.normalizeCountriesBulk = normalizeCountriesBulk;
-exports.normalizePostalCode = normalizePostalCode;
-exports.getAssociationIdBetween = getAssociationIdBetween;
-exports.extractErrorInfo = extractErrorInfo;
-exports.createRelationBetweenRecords = createRelationBetweenRecords;
-exports.ensureContactPropertyAssociation = ensureContactPropertyAssociation;
-exports.normalizeWorkingWithRealtor = normalizeWorkingWithRealtor;
-exports.normalizeMLSStatus = normalizeMLSStatus;
-exports.normalizeLiquidAssets = normalizeLiquidAssets;
-exports.normalizeHouseholdIncome = normalizeHouseholdIncome;
-exports.normalizedLoanType = normalizedLoanType;
-exports.buildTags = buildTags;
-exports.normalizePropertyType = normalizePropertyType;
-exports.normalizeLeadSource = normalizeLeadSource;
-exports.normalizeFreeAndClear = normalizeFreeAndClear;
-exports.extractGhlId = extractGhlId;
-exports.findGhlContactByEmailOrPhone = findGhlContactByEmailOrPhone;
-exports.findGhlPropertyByAddress = findGhlPropertyByAddress;
-const axios_1 = __importDefault(require("axios"));
-const client_1 = require("@prisma/client");
+import axios from "axios";
+import { PrismaClient } from "@prisma/client";
 const GHL_BASE_URL = "https://services.leadconnectorhq.com";
 const API_VERSION = "2021-07-28";
-const prisma = new client_1.PrismaClient();
+const prisma = new PrismaClient();
 const CUSTOM_OBJECT_KEY = "custom_objects.properties";
 let countriesLib = null;
 try {
@@ -212,7 +187,7 @@ function _normalizeTextForMatch(input) {
 /**
  * normalizeCountry(value) -> returns ISO alpha-2 string (e.g. "US") or null if unknown
  */
-function normalizeCountry(value) {
+export function normalizeCountry(value) {
     if (value === null || value === undefined)
         return null;
     const raw = String(value).trim();
@@ -312,7 +287,7 @@ function normalizeCountry(value) {
  * normalizeCountriesBulk(arr)
  * returns an object { original -> normalized } and also counts of normalized values
  */
-function normalizeCountriesBulk(values) {
+export function normalizeCountriesBulk(values) {
     const map = {};
     const counts = {};
     for (const v of values) {
@@ -323,7 +298,7 @@ function normalizeCountriesBulk(values) {
     }
     return { map, counts };
 }
-function normalizePostalCode(postalCode, countryCode = "US") {
+export function normalizePostalCode(postalCode, countryCode = "US") {
     if (!postalCode)
         return null;
     const pc = postalCode.toString().trim().toUpperCase();
@@ -366,9 +341,9 @@ function normalizePostalCode(postalCode, countryCode = "US") {
             return pc;
     }
 }
-async function getAssociationIdBetween(firstObjectKey, secondObjectKey, privateToken, locationId) {
+export async function getAssociationIdBetween(firstObjectKey, secondObjectKey, privateToken, locationId) {
     try {
-        const resp = await axios_1.default.get(`${GHL_BASE_URL}/associations/objectKey/${encodeURIComponent(firstObjectKey)}`, {
+        const resp = await axios.get(`${GHL_BASE_URL}/associations/objectKey/${encodeURIComponent(firstObjectKey)}`, {
             headers: {
                 Authorization: `Bearer ${privateToken}`,
                 Version: API_VERSION,
@@ -407,14 +382,14 @@ async function getAssociationIdBetween(firstObjectKey, secondObjectKey, privateT
     }
     catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
-        const axiosError = axios_1.default.isAxiosError(err) ? err : null;
+        const axiosError = axios.isAxiosError(err) ? err : null;
         console.error("Error fetching associations:", axiosError?.response?.status ?? error.message);
         return undefined;
     }
 }
-function extractErrorInfo(err) {
+export function extractErrorInfo(err) {
     // Axios error
-    if (axios_1.default.isAxiosError(err)) {
+    if (axios.isAxiosError(err)) {
         const ae = err;
         return {
             message: ae.message ?? "Axios error",
@@ -435,7 +410,7 @@ function extractErrorInfo(err) {
         return { message: "Unknown error" };
     }
 }
-async function createRelationBetweenRecords(associationId, firstRecordId, secondRecordId, privateToken, locationId) {
+export async function createRelationBetweenRecords(associationId, firstRecordId, secondRecordId, privateToken, locationId) {
     if (!associationId || !firstRecordId || !secondRecordId) {
         return { success: false, error: "missing associationId or record ids" };
     }
@@ -446,7 +421,7 @@ async function createRelationBetweenRecords(associationId, firstRecordId, second
         secondRecordId,
     };
     try {
-        const resp = await axios_1.default.post(`${GHL_BASE_URL}/associations/relations`, body, {
+        const resp = await axios.post(`${GHL_BASE_URL}/associations/relations`, body, {
             headers: {
                 Authorization: `Bearer ${privateToken}`,
                 Version: API_VERSION,
@@ -460,7 +435,7 @@ async function createRelationBetweenRecords(associationId, firstRecordId, second
         return { success: false, error: { status: resp.status, data: resp.data } };
     }
     catch (err) {
-        const axiosError = axios_1.default.isAxiosError(err) ? err : null;
+        const axiosError = axios.isAxiosError(err) ? err : null;
         const error = err instanceof Error ? err : null;
         const status = axiosError?.response?.status;
         const data = axiosError?.response?.data;
@@ -478,7 +453,7 @@ async function createRelationBetweenRecords(associationId, firstRecordId, second
         return { success: false, error: data ?? error?.message ?? String(err) };
     }
 }
-async function ensureContactPropertyAssociation(contactGhlId, propertyGhlId, privateToken, locationId) {
+export async function ensureContactPropertyAssociation(contactGhlId, propertyGhlId, privateToken, locationId) {
     if (!contactGhlId || !propertyGhlId) {
         console.warn("Skipping association — missing GHL ids", {
             contactGhlId,
@@ -513,7 +488,7 @@ async function ensureContactPropertyAssociation(contactGhlId, propertyGhlId, pri
     }
     if (!contactName) {
         try {
-            const resp = await axios_1.default.get(`${GHL_BASE_URL}/contacts/${encodeURIComponent(contactGhlId)}`, {
+            const resp = await axios.get(`${GHL_BASE_URL}/contacts/${encodeURIComponent(contactGhlId)}`, {
                 headers: {
                     Authorization: `Bearer ${privateToken}`,
                     Version: API_VERSION,
@@ -566,21 +541,19 @@ async function ensureContactPropertyAssociation(contactGhlId, propertyGhlId, pri
         });
     }
 }
-const toNumber = (v) => {
+export const toNumber = (v) => {
     if (v === null || v === undefined || v === "")
         return null;
     const n = typeof v === "string" ? Number(v.replace(/,/g, "")) : v;
     return isNaN(n) ? null : n;
 };
-exports.toNumber = toNumber;
-const toFloat = (v) => {
+export const toFloat = (v) => {
     if (v === null || v === undefined || v === "")
         return null;
     const n = typeof v === "string" ? parseFloat(v.replace(/,/g, "")) : v;
     return isNaN(n) ? null : n;
 };
-exports.toFloat = toFloat;
-const normalizeYesNo = (value) => {
+export const normalizeYesNo = (value) => {
     if (!value)
         return null;
     const normalized = value.toString().toLowerCase().trim();
@@ -590,8 +563,7 @@ const normalizeYesNo = (value) => {
         return "No";
     return null;
 };
-exports.normalizeYesNo = normalizeYesNo;
-function normalizeWorkingWithRealtor(val) {
+export function normalizeWorkingWithRealtor(val) {
     if (!val || val.trim() === "")
         return "No I am Not";
     const lower = val.trim().toLowerCase();
@@ -601,7 +573,7 @@ function normalizeWorkingWithRealtor(val) {
         return "Yes, I am";
     return "No I am Not";
 }
-function normalizeMLSStatus(raw) {
+export function normalizeMLSStatus(raw) {
     if (!raw)
         return "FALSE";
     const val = raw.trim().toLowerCase();
@@ -610,7 +582,7 @@ function normalizeMLSStatus(raw) {
         return "FALSE";
     return "TRUE";
 }
-function normalizeLiquidAssets(raw) {
+export function normalizeLiquidAssets(raw) {
     if (!raw || raw.trim() === "")
         return undefined;
     const val = raw.trim().toLowerCase();
@@ -618,7 +590,7 @@ function normalizeLiquidAssets(raw) {
         return "Over $20k";
     return undefined;
 }
-function normalizeHouseholdIncome(value) {
+export function normalizeHouseholdIncome(value) {
     if (value === undefined || value === null)
         return undefined;
     let numValue;
@@ -634,7 +606,7 @@ function normalizeHouseholdIncome(value) {
         return "65k - 90k";
     return "Above 90k";
 }
-const normalizeLoanType = (value) => {
+export const normalizeLoanType = (value) => {
     if (!value)
         return undefined;
     const v = value.toString().trim().replace(/\s+/g, " ").toLowerCase();
@@ -680,8 +652,7 @@ const normalizeLoanType = (value) => {
         return undefined;
     return undefined;
 };
-exports.normalizeLoanType = normalizeLoanType;
-function normalizedLoanType(raw) {
+export function normalizedLoanType(raw) {
     if (!raw)
         return undefined;
     const val = raw.trim().toLowerCase();
@@ -697,7 +668,7 @@ function normalizedLoanType(raw) {
         return "Jumbo";
     return undefined;
 }
-function buildTags(input, existingContactTags, tagToAdd = "Seller") {
+export function buildTags(input, existingContactTags, tagToAdd = "Seller") {
     const normalizeSource = (src) => {
         if (!src)
             return [];
@@ -724,7 +695,7 @@ function buildTags(input, existingContactTags, tagToAdd = "Seller") {
     const result = Array.from(map.values()).map((s) => s.trim());
     return result.length ? result : undefined;
 }
-function normalizePropertyType(input) {
+export function normalizePropertyType(input) {
     if (!input)
         return null;
     const value = input.trim().toLowerCase();
@@ -765,7 +736,7 @@ function normalizePropertyType(input) {
     };
     return mappings[value] ?? null;
 }
-function normalizeLeadSource(value) {
+export function normalizeLeadSource(value) {
     const options = [
         "Saw Sign",
         "On Zillow",
@@ -778,7 +749,7 @@ function normalizeLeadSource(value) {
         return undefined;
     return options.find((opt) => opt.toLowerCase() === value.toLowerCase());
 }
-function normalizeFreeAndClear(value) {
+export function normalizeFreeAndClear(value) {
     if (value === undefined || value === null)
         return value; // ← Fixed
     if (typeof value === "boolean") {
@@ -793,7 +764,7 @@ function normalizeFreeAndClear(value) {
     }
     return undefined;
 }
-function extractGhlId(respData) {
+export function extractGhlId(respData) {
     if (!respData || typeof respData !== "object")
         return undefined;
     // Helper to safely access nested properties
@@ -817,7 +788,7 @@ function extractGhlId(respData) {
         get(data, "contact", "id") ||
         undefined);
 }
-exports.parkingMapping = {
+export const parkingMapping = {
     no: "No Parking",
     No: "No Parking",
     NO: "No Parking",
@@ -856,7 +827,7 @@ exports.parkingMapping = {
     "Garage Attached On Street": "Other",
     "Inside Entrance, Attached,": "Other",
 };
-async function findGhlContactByEmailOrPhone(email, phone, privateToken, locationId) {
+export async function findGhlContactByEmailOrPhone(email, phone, privateToken, locationId) {
     console.info(`🔍 Searching for existing contact - Email: ${email || "N/A"}, Phone: ${phone || "N/A"}`);
     if (!email && !phone) {
         console.warn(`⚠️ No email or phone provided for contact search`);
@@ -872,7 +843,7 @@ async function findGhlContactByEmailOrPhone(email, phone, privateToken, location
         if (email) {
             console.debug(`📧 Searching GHL by email: ${email}`);
             try {
-                const resp = await axios_1.default.get(`${GHL_BASE_URL}/contacts/search/duplicate`, {
+                const resp = await axios.get(`${GHL_BASE_URL}/contacts/search/duplicate`, {
                     headers,
                     params: {
                         locationId,
@@ -886,7 +857,7 @@ async function findGhlContactByEmailOrPhone(email, phone, privateToken, location
                 }
             }
             catch (emailError) {
-                const axiosError = axios_1.default.isAxiosError(emailError) ? emailError : null;
+                const axiosError = axios.isAxiosError(emailError) ? emailError : null;
                 const status = axiosError?.response?.status;
                 // 404 means no duplicate found
                 if (status === 404) {
@@ -912,7 +883,7 @@ async function findGhlContactByEmailOrPhone(email, phone, privateToken, location
         if (phone) {
             console.debug(`📱 Searching GHL by phone: ${phone}`);
             try {
-                const resp = await axios_1.default.get(`${GHL_BASE_URL}/contacts/search/duplicate`, {
+                const resp = await axios.get(`${GHL_BASE_URL}/contacts/search/duplicate`, {
                     headers,
                     params: {
                         locationId,
@@ -927,7 +898,7 @@ async function findGhlContactByEmailOrPhone(email, phone, privateToken, location
                 }
             }
             catch (phoneError) {
-                const axiosError = axios_1.default.isAxiosError(phoneError) ? phoneError : null;
+                const axiosError = axios.isAxiosError(phoneError) ? phoneError : null;
                 const status = axiosError?.response?.status;
                 // 404 means no duplicate found
                 if (status === 404) {
@@ -954,7 +925,7 @@ async function findGhlContactByEmailOrPhone(email, phone, privateToken, location
     }
     catch (e) {
         const errorMsg = e instanceof Error ? e.message : String(e);
-        const axiosError = axios_1.default.isAxiosError(e) ? e : null;
+        const axiosError = axios.isAxiosError(e) ? e : null;
         const status = axiosError?.response?.status;
         console.error(`❌ Critical error searching for contact:`, {
             error: errorMsg,
@@ -970,7 +941,7 @@ async function findGhlContactByEmailOrPhone(email, phone, privateToken, location
         return undefined;
     }
 }
-async function findGhlPropertyByAddress(address, privateToken, locationId) {
+export async function findGhlPropertyByAddress(address, privateToken, locationId) {
     if (!address) {
         console.debug(`⚠️ No address provided for property search`);
         return undefined;
@@ -985,7 +956,7 @@ async function findGhlPropertyByAddress(address, privateToken, locationId) {
         };
         // Use POST to search custom object records
         // Note: Make sure "address" is configured as a searchable property in your custom object schema
-        const resp = await axios_1.default.post(`${GHL_BASE_URL}/objects/${CUSTOM_OBJECT_KEY}/records/search`, {
+        const resp = await axios.post(`${GHL_BASE_URL}/objects/${CUSTOM_OBJECT_KEY}/records/search`, {
             locationId,
             page: 1,
             pageLimit: 1, // Only need the first match
@@ -1002,7 +973,7 @@ async function findGhlPropertyByAddress(address, privateToken, locationId) {
         return undefined;
     }
     catch (error) {
-        const axiosError = axios_1.default.isAxiosError(error) ? error : null;
+        const axiosError = axios.isAxiosError(error) ? error : null;
         const errorInstance = error instanceof Error ? error : null;
         const status = axiosError?.response?.status;
         const errorData = axiosError?.response?.data;

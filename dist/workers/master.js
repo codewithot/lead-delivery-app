@@ -1,96 +1,147 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.master = void 0;
 // src/workers/master.ts
-const workerManager_1 = require("../lib/workerManager");
-const queue_1 = require("../lib/queue");
-const events_1 = require("events");
+import { EventEmitter } from "events";
+import { getQueueInstance, closeQueue, getDailyQueueName, JOB_TYPES, } from "../lib/queue";
+import { todayYYYYMMDD } from "../lib/timezone";
+import { startDailyQueueScheduler } from "../schedulers/dailyQueueScheduler";
+import { processLeadAssignment } from "../jobs/leadAssignment";
+// Configuration
 const WORKER_COUNT = parseInt(process.env.WORKER_COUNT || "10", 10);
-class MasterProcess {
-    constructor() {
-        this.workers = [];
-        this.isShuttingDown = false;
+const JOB_CONCURRENCY = parseInt(process.env.JOB_CONCURRENCY || "10", 10);
+// Event emitter for coordinating workers
+const masterEvents = new EventEmitter();
+// Track active workers
+const activeWorkers = new Set();
+const workerMetrics = new Map();
+async function setupQueue() {
+    console.log("🔧 Setting up queue...");
+    const boss = await getQueueInstance();
+    console.log("✅ pg-boss started successfully");
+    // Create today's daily queue
+    const todayQueue = getDailyQueueName(JOB_TYPES.DAILY_LEAD_ASSIGNMENT, todayYYYYMMDD());
+    try {
+        await boss.createQueue(todayQueue);
+        console.log(`✅ Daily queue created: ${todayQueue}`);
     }
-    async start() {
-        console.log(`🎯 Initializing worker system...\n`);
-        // create a shared event emitter for workers
-        const eventEmitter = new events_1.EventEmitter(); // <-- create emitter
-        // Initialize queue and create the deliver-leads queue
-        console.log("🔧 Setting up queue...");
-        const boss = await (0, queue_1.getQueueInstance)();
-        try {
-            await boss.createQueue(queue_1.JOB_TYPES.DELIVER_LEADS);
-            console.log("✅ Queue created successfully\n");
-        }
-        catch {
-            console.log("ℹ️  Queue already exists or creation skipped\n");
-        }
-        console.log(`🎯 Starting ${WORKER_COUNT} workers...\n`);
-        // Create and start all workers
-        for (let i = 1; i <= WORKER_COUNT; i++) {
-            const worker = new workerManager_1.WorkerManager({
-                workerId: i,
-                useDailyQueue: true, // Enable daily queue feature
-                concurrency: parseInt(process.env.JOB_CONCURRENCY || "10", 10),
-            }, eventEmitter);
-            this.workers.push(worker);
-            await worker.start();
-        }
-        console.log(`\n✅ All ${WORKER_COUNT} workers started successfully\n`);
-        // Setup graceful shutdown
-        this.setupGracefulShutdown();
-        // Keep process alive
-        process.stdin.resume();
+    catch {
+        console.log(`ℹ️ Daily queue already exists: ${todayQueue}`);
     }
-    setupGracefulShutdown() {
-        const shutdown = async (signal) => {
-            if (this.isShuttingDown) {
-                console.log("⚠️ Already shutting down...");
-                return;
-            }
-            this.isShuttingDown = true;
-            console.log(`\n📢 Received ${signal}, starting graceful shutdown...`);
+    // Create the batch delivery queue
+    try {
+        await boss.createQueue(JOB_TYPES.DELIVER_LEADS_BATCH);
+        console.log(`✅ Batch queue created: ${JOB_TYPES.DELIVER_LEADS_BATCH}`);
+    }
+    catch {
+        console.log(`ℹ️ Batch queue already exists: ${JOB_TYPES.DELIVER_LEADS_BATCH}`);
+    }
+    return boss;
+}
+async function startWorker(workerId, queueName) {
+    const boss = await getQueueInstance();
+    console.log(`🚀 Worker ${workerId} starting...`);
+    console.log(`   🔍 Binding to queue: ${queueName}`);
+    console.log(`   🔢 Concurrency: ${JOB_CONCURRENCY}`);
+    // Initialize metrics
+    workerMetrics.set(workerId, {
+        jobsProcessed: 0,
+        jobsFailed: 0,
+        totalProcessingTime: 0,
+        averageProcessingTime: 0,
+    });
+    // Subscribe to the queue with handler
+    // Type the handler explicitly to handle both single job and array of jobs
+    await boss.work(queueName, async (jobs) => {
+        const metrics = workerMetrics.get(workerId);
+        // Normalize to array for consistent processing
+        const jobArray = Array.isArray(jobs) ? jobs : [jobs];
+        for (const job of jobArray) {
+            const startTime = Date.now();
             try {
-                // Stop all workers
-                console.log("🛑 Stopping workers...");
-                await Promise.all(this.workers.map((w) => w.stop()));
-                // Close queue
-                console.log("🛑 Closing queue...");
-                await (0, queue_1.closeQueue)();
-                console.log("✅ Graceful shutdown complete");
-                process.exit(0);
+                console.log(`[Worker ${workerId}] Processing job ${job.id} for user ${job.data.userId}`);
+                await processLeadAssignment(job.data);
+                const processingTime = Date.now() - startTime;
+                metrics.jobsProcessed++;
+                metrics.totalProcessingTime += processingTime;
+                metrics.averageProcessingTime =
+                    metrics.totalProcessingTime / metrics.jobsProcessed;
+                console.log(`[Worker ${workerId}] ✅ Job ${job.id} completed in ${processingTime}ms`);
             }
             catch (error) {
-                console.error("❌ Error during shutdown:", error);
-                process.exit(1);
+                metrics.jobsFailed++;
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                console.error(`[Worker ${workerId}] ❌ Job ${job.id} failed:`, errorMessage);
+                throw error; // Re-throw for pg-boss retry logic
             }
-        };
-        // Handle different termination signals
-        process.on("SIGTERM", () => shutdown("SIGTERM"));
-        process.on("SIGINT", () => shutdown("SIGINT"));
-        process.on("SIGUSR2", () => shutdown("SIGUSR2"));
+        }
+    });
+    console.log(`✅ Worker ${workerId} subscribed to: ${queueName}`);
+    console.log(`ℹ️  Worker ${workerId} ready to process jobs`);
+    activeWorkers.add(workerId);
+    console.log(`✅ Worker ${workerId} is now processing jobs`);
+}
+async function stopWorker(workerId) {
+    console.log(`🛑 Worker ${workerId} stopping...`);
+    activeWorkers.delete(workerId);
+    const metrics = workerMetrics.get(workerId);
+    if (metrics) {
+        console.log(`✅ Worker ${workerId} stopped cleanly`);
+        console.log(`📊 Final metrics for Worker ${workerId}:`, metrics);
+    }
+}
+async function gracefulShutdown(signal) {
+    console.log(`\n📢 Received ${signal}, starting graceful shutdown...`);
+    // Stop accepting new jobs
+    console.log("🛑 Stopping workers...");
+    // Stop all workers
+    const stopPromises = Array.from(activeWorkers).map((workerId) => stopWorker(workerId));
+    await Promise.all(stopPromises);
+    // Close queue
+    console.log("🛑 Closing queue...");
+    await closeQueue();
+    console.log("✅ Graceful shutdown complete\n");
+    process.exit(0);
+}
+async function main() {
+    try {
+        console.log("🎯 Initializing worker system...\n");
+        // Start the daily queue scheduler
+        console.log("\n📅 Initializing Daily Queue Scheduler");
+        console.log(`   Timezone: ${process.env.REGION_TZ || "America/New_York"}`);
+        console.log(`   Schedule: 06:00, 06:10, 06:20\n`);
+        startDailyQueueScheduler();
+        console.log("✅ Daily queue scheduler started successfully\n");
+        // Setup queue and create necessary queues
+        await setupQueue();
+        console.log(`✅ Queue created successfully\n`);
+        // Start workers
+        console.log(`🎯 Starting ${WORKER_COUNT} workers...\n`);
+        const todayQueue = getDailyQueueName(JOB_TYPES.DAILY_LEAD_ASSIGNMENT, todayYYYYMMDD());
+        const workerPromises = [];
+        for (let i = 1; i <= WORKER_COUNT; i++) {
+            workerPromises.push(startWorker(i, todayQueue));
+        }
+        await Promise.all(workerPromises);
+        console.log(`\n✅ All ${WORKER_COUNT} workers started successfully\n`);
+        // Setup graceful shutdown
+        process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+        process.on("SIGINT", () => gracefulShutdown("SIGINT"));
         // Handle uncaught errors
         process.on("uncaughtException", (error) => {
             console.error("💥 Uncaught Exception:", error);
-            shutdown("uncaughtException");
+            gracefulShutdown("UNCAUGHT_EXCEPTION");
         });
         process.on("unhandledRejection", (reason, promise) => {
             console.error("💥 Unhandled Rejection at:", promise, "reason:", reason);
-            shutdown("unhandledRejection");
+            gracefulShutdown("UNHANDLED_REJECTION");
+        });
+        // Keep process alive
+        masterEvents.on("worker:ready", (workerId) => {
+            console.log(`ℹ️  Worker ${workerId} ready and listening`);
         });
     }
-    getStatus() {
-        return {
-            totalWorkers: WORKER_COUNT,
-            workers: this.workers.map((w) => w.getStatus()),
-            isShuttingDown: this.isShuttingDown,
-        };
+    catch (error) {
+        console.error("❌ Failed to start worker system:", error);
+        process.exit(1);
     }
 }
-// Start the master process
-const master = new MasterProcess();
-exports.master = master;
-master.start().catch((error) => {
-    console.error("💥 Failed to start master process:", error);
-    process.exit(1);
-});
+// Start the worker system
+main();

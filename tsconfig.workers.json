@@ -1,7 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "module": "commonjs",
+    "module": "esnext",
     "target": "ES2020",
     "outDir": "./dist",
     "rootDir": "./src",
@@ -9,12 +9,17 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "downlevelIteration": true,
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
     "strict": false,
     "noEmit": false,
     "allowImportingTsExtensions": false
   },
-  "include": ["src/workers/**/*", "src/lib/**/*"],
+  "include": [
+    "src/workers/**/*",
+    "src/jobs/**/*",
+    "src/schedulers/**/*",
+    "src/lib/**/*"
+  ],
   "exclude": ["node_modules", ".next", "out"]
 }

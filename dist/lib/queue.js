@@ -1,18 +1,11 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.JOB_TYPES = void 0;
-exports.getQueueInstance = getQueueInstance;
-exports.closeQueue = closeQueue;
-exports.getDailyQueueName = getDailyQueueName;
-exports.getTodayQueueName = getTodayQueueName;
 // src/lib/queue.ts
-const pg_boss_1 = require("pg-boss");
-const timezone_1 = require("./timezone");
+import { PgBoss } from "pg-boss";
+import { todayYYYYMMDD } from "./timezone";
 let boss = null;
-async function getQueueInstance() {
+export async function getQueueInstance() {
     if (boss)
         return boss;
-    boss = new pg_boss_1.PgBoss({
+    boss = new PgBoss({
         connectionString: process.env.DATABASE_URL,
         schema: "pgboss",
         // Database pool configuration
@@ -25,7 +18,7 @@ async function getQueueInstance() {
     console.log("✅ pg-boss started successfully");
     return boss;
 }
-async function closeQueue() {
+export async function closeQueue() {
     if (boss) {
         await boss.stop({ timeout: 30000 });
         boss = null;
@@ -33,23 +26,23 @@ async function closeQueue() {
     }
 }
 // Job type definitions
-exports.JOB_TYPES = {
+export const JOB_TYPES = {
     DELIVER_LEADS: "deliver-leads",
     DELIVER_LEADS_BATCH: "deliver-leads-batch",
-    DAILY_LEAD_ASSIGNMENT: "leads:assign", // Base name, will be suffixed with :YYYYMMDD
+    DAILY_LEAD_ASSIGNMENT: "leads_assign", // Changed from "leads:assign" - underscores instead of colons
 };
 /**
  * Generate daily queue name with date suffix
- * @param baseQueueName - Base queue name (e.g., "leads:assign")
+ * @param baseQueueName - Base queue name (e.g., "leads_assign")
  * @param date - Date in YYYYMMDD format
- * @returns Full queue name (e.g., "leads:assign:20250108")
+ * @returns Full queue name (e.g., "leads_assign_20250108")
  */
-function getDailyQueueName(baseQueueName, date) {
-    return `${baseQueueName}:${date}`;
+export function getDailyQueueName(baseQueueName, date) {
+    return `${baseQueueName}_${date}`; // Changed from colon to underscore
 }
 /**
  * Get today's queue name based on region timezone
  */
-function getTodayQueueName() {
-    return getDailyQueueName(exports.JOB_TYPES.DAILY_LEAD_ASSIGNMENT, (0, timezone_1.todayYYYYMMDD)());
+export function getTodayQueueName() {
+    return getDailyQueueName(JOB_TYPES.DAILY_LEAD_ASSIGNMENT, todayYYYYMMDD());
 }

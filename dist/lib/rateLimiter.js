@@ -1,13 +1,7 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.rateLimitedRequest = rateLimitedRequest;
 // src/lib/rateLimiter.ts
-const bottleneck_1 = __importDefault(require("bottleneck"));
+import Bottleneck from "bottleneck";
 // Create a rate limiter for GHL API calls
-const ghlLimiter = new bottleneck_1.default({
+const ghlLimiter = new Bottleneck({
     maxConcurrent: parseInt(process.env.GHL_CONCURRENT_REQUESTS || "5", 10),
     minTime: 1000 / parseInt(process.env.GHL_REQUESTS_PER_SECOND || "10", 10),
     reservoir: 100, // Initial tokens
@@ -25,6 +19,6 @@ ghlLimiter.on("failed", async (error) => {
 ghlLimiter.on("error", (error) => {
     console.error("❌ Rate limiter error:", error);
 });
-async function rateLimitedRequest(fn) {
+export async function rateLimitedRequest(fn) {
     return ghlLimiter.schedule(fn);
 }

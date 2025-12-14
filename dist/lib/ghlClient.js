@@ -1,17 +1,11 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.getValidAccessToken = getValidAccessToken;
 // src/lib/ghlClient.ts
-const axios_1 = __importDefault(require("axios"));
-const client_1 = require("@prisma/client");
-const prisma = new client_1.PrismaClient();
+import axios from "axios";
+import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
 const GHL_TOKEN_URL = "https://rest.gohighlevel.com/oauth/token";
 const CLIENT_ID = process.env.GHL_CLIENT_ID;
 const CLIENT_SECRET = process.env.GHL_CLIENT_SECRET;
-async function getValidAccessToken(user) {
+export async function getValidAccessToken(user) {
     const { accessToken, refreshToken, tokenExpiresAt } = user;
     // 1️⃣ Ensure we actually have tokens and an expiry
     if (!accessToken || !refreshToken || !tokenExpiresAt) {
@@ -24,7 +18,7 @@ async function getValidAccessToken(user) {
         return accessToken;
     }
     // 3️⃣ Otherwise, refresh
-    const resp = await axios_1.default.post(GHL_TOKEN_URL, {
+    const resp = await axios.post(GHL_TOKEN_URL, {
         grant_type: "refresh_token",
         client_id: CLIENT_ID,
         client_secret: CLIENT_SECRET,

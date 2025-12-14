@@ -1,11 +1,7 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateJobProgress = updateJobProgress;
-exports.getJobProgress = getJobProgress;
 // src/lib/jobProgress.ts
-const client_1 = require("@prisma/client");
-const prisma = new client_1.PrismaClient();
-async function updateJobProgress(jobId, progress) {
+import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
+export async function updateJobProgress(jobId, progress) {
     // Fetch the current job
     const job = await prisma.job.findUnique({ where: { id: jobId } });
     if (!job) {
@@ -25,7 +21,7 @@ async function updateJobProgress(jobId, progress) {
     });
 }
 // Get job progress
-async function getJobProgress(jobId) {
+export async function getJobProgress(jobId) {
     const job = await prisma.job.findUnique({ where: { id: jobId } });
     if (!job) {
         return null;

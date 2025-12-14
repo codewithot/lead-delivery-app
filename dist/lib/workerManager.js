@@ -1,16 +1,13 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.WorkerManager = void 0;
 // src/lib/workerManager.ts - FULLY FIXED VERSION
-const queue_1 = require("./queue");
-const client_1 = require("@prisma/client");
-const monitoring_1 = require("./monitoring");
-const events_1 = require("events");
-const jobProgress_1 = require("./jobProgress");
-const idempotency_1 = require("./idempotency");
-const pushLeads_1 = require("./pushLeads");
-const prisma = new client_1.PrismaClient();
-class WorkerManager {
+import { getQueueInstance, JOB_TYPES, getTodayQueueName, } from "./queue";
+import { PrismaClient, } from "@prisma/client";
+import { setupMemoryMonitoring } from "./monitoring";
+import { EventEmitter } from "events";
+import { updateJobProgress } from "./jobProgress";
+import { checkAndClaimIdempotency, markIdempotencyCompleted, markIdempotencyFailed, } from "./idempotency";
+import { pushLeadsForUser } from "./pushLeads";
+const prisma = new PrismaClient();
+export class WorkerManager {
     constructor(config, eventEmitter) {
         this.isRunning = false;
         this.activeJobs = 0;
@@ -24,7 +21,7 @@ class WorkerManager {
         this.useDailyQueue = config.useDailyQueue ?? false;
         this.concurrency =
             config.concurrency ?? parseInt(process.env.JOB_CONCURRENCY || "10", 10);
-        this.eventEmitter = eventEmitter ?? new events_1.EventEmitter();
+        this.eventEmitter = eventEmitter ?? new EventEmitter();
     }
     async start() {
         if (this.isRunning) {
@@ -33,7 +30,7 @@ class WorkerManager {
         }
         console.log(`🚀 Worker ${this.workerId} starting...`);
         const targetQueue = this.useDailyQueue
-            ? (0, queue_1.getTodayQueueName)()
+            ? getTodayQueueName()
             : this.queueName;
         if (targetQueue) {
             console.log(`   📍 Binding to queue: ${targetQueue}`);
@@ -43,15 +40,15 @@ class WorkerManager {
         }
         console.log(`   🔢 Concurrency: ${this.concurrency}`);
         this.isRunning = true;
-        (0, monitoring_1.setupMemoryMonitoring)(this.workerId);
-        const boss = await (0, queue_1.getQueueInstance)();
-        await boss.work(queue_1.JOB_TYPES.DELIVER_LEADS_BATCH, async (jobs) => {
+        setupMemoryMonitoring(this.workerId);
+        const boss = await getQueueInstance();
+        await boss.work(JOB_TYPES.DELIVER_LEADS_BATCH, async (jobs) => {
             const jobArray = Array.isArray(jobs) ? jobs : [jobs];
             const job = jobArray[0];
             await this.processBatchJob(job);
         });
         if (this.useDailyQueue || targetQueue) {
-            const queueToSubscribe = targetQueue || (0, queue_1.getTodayQueueName)();
+            const queueToSubscribe = targetQueue || getTodayQueueName();
             await boss.work(queueToSubscribe, async (jobs) => {
                 const jobArray = Array.isArray(jobs) ? jobs : [jobs];
                 const job = jobArray[0];
@@ -71,8 +68,8 @@ class WorkerManager {
             `(Contact: ${payload.contactId}, Properties: ${payload.propertyIds.length}) ` +
             `(Active: ${this.activeJobs})`);
         try {
-            const queueName = this.useDailyQueue ? (0, queue_1.getTodayQueueName)() : job.name;
-            const idempotencyCheck = await (0, idempotency_1.checkAndClaimIdempotency)(queueName, payload.idempotencyKey, job.id);
+            const queueName = this.useDailyQueue ? getTodayQueueName() : job.name;
+            const idempotencyCheck = await checkAndClaimIdempotency(queueName, payload.idempotencyKey, job.id);
             if (!idempotencyCheck.shouldProcess) {
                 console.log(`⏩ Skipping job ${job.id} - already processed (idempotency)`);
                 return;
@@ -135,7 +132,7 @@ class WorkerManager {
                 updatedAt: new Date(),
                 userId: payload.userId,
             };
-            await (0, pushLeads_1.pushLeadsForUser)(syntheticJob);
+            await pushLeadsForUser(syntheticJob);
             await prisma.job.update({
                 where: { id: job.id },
                 data: {
@@ -143,7 +140,7 @@ class WorkerManager {
                     finishedAt: new Date(),
                 },
             });
-            await (0, idempotency_1.markIdempotencyCompleted)(queueName, payload.idempotencyKey, {
+            await markIdempotencyCompleted(queueName, payload.idempotencyKey, {
                 jobId: job.id,
                 contactId: payload.contactId,
                 propertiesProcessed: properties.length,
@@ -158,8 +155,8 @@ class WorkerManager {
             const errorMessage = error instanceof Error ? error.message : String(error);
             console.error(`❌ Worker ${this.workerId} failed job ${job.id}:`, errorMessage);
             this.metrics.jobsFailed++;
-            const queueName = this.useDailyQueue ? (0, queue_1.getTodayQueueName)() : job.name;
-            await (0, idempotency_1.markIdempotencyFailed)(queueName, payload.idempotencyKey, error);
+            const queueName = this.useDailyQueue ? getTodayQueueName() : job.name;
+            await markIdempotencyFailed(queueName, payload.idempotencyKey, error);
             await prisma.job
                 .upsert({
                 where: { id: job.id },
@@ -290,14 +287,14 @@ class WorkerManager {
         await this.pushPropertiesBatch(properties, user, payload, jobId);
     }
     async pushPropertiesBatch(properties, user, payload, jobId) {
-        await (0, jobProgress_1.updateJobProgress)(jobId, {
+        await updateJobProgress(jobId, {
             processed: payload.batchIndex * payload.batchSize,
             total: payload.totalBatches * payload.batchSize,
             status: `Processing batch ${payload.batchIndex + 1}/${payload.totalBatches}`,
         }).catch((e) => console.log("Failed to update progress:", e));
         const syntheticJob = {
             id: jobId,
-            type: queue_1.JOB_TYPES.DELIVER_LEADS_BATCH,
+            type: JOB_TYPES.DELIVER_LEADS_BATCH,
             payload: {
                 userId: user.id,
                 properties,
@@ -312,8 +309,8 @@ class WorkerManager {
             updatedAt: new Date(),
             userId: user.id,
         };
-        await (0, pushLeads_1.pushLeadsForUser)(syntheticJob);
-        await (0, jobProgress_1.updateJobProgress)(jobId, {
+        await pushLeadsForUser(syntheticJob);
+        await updateJobProgress(jobId, {
             processed: (payload.batchIndex + 1) * payload.batchSize,
             total: payload.totalBatches * payload.batchSize,
             status: `Completed batch ${payload.batchIndex + 1}/${payload.totalBatches}`,
@@ -383,4 +380,3 @@ class WorkerManager {
         console.log(`🔄 Worker ${this.workerId} metrics reset`);
     }
 }
-exports.WorkerManager = WorkerManager;

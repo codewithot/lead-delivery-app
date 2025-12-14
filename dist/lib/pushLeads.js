@@ -1,15 +1,9 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.pushLeadsForUser = pushLeadsForUser;
-const client_1 = require("@prisma/client");
-const axios_1 = __importDefault(require("axios"));
-const rateLimiter_1 = require("./rateLimiter");
-const helper_1 = require("./helper");
-const jobProgress_1 = require("./jobProgress");
-const prisma = new client_1.PrismaClient();
+import { PrismaClient } from "@prisma/client";
+import axios from "axios";
+import { rateLimitedRequest } from "./rateLimiter";
+import { ensureContactPropertyAssociation, toNumber, toFloat, normalizeYesNo, normalizeWorkingWithRealtor, normalizeMLSStatus, normalizeLiquidAssets, normalizeHouseholdIncome, normalizeLoanType, normalizedLoanType, buildTags, normalizePropertyType, parkingMapping, extractGhlId, normalizeFreeAndClear, normalizeLeadSource, findGhlContactByEmailOrPhone, findGhlPropertyByAddress, normalizeCountry, normalizePostalCode, } from "./helper";
+import { updateJobProgress } from "./jobProgress";
+const prisma = new PrismaClient();
 const GHL_BASE_URL = "https://services.leadconnectorhq.com";
 const CUSTOM_OBJECT_KEY = "custom_objects.properties";
 const API_VERSION = "2021-07-28";
@@ -37,7 +31,7 @@ const GHL_ACCOUNTS = [
     //     "pit-b1652b14-6a49-4c64-91d6-74dffe481cbc",
     // },
 ];
-async function pushLeadsForUser(job) {
+export async function pushLeadsForUser(job) {
     console.info(`▶ Starting job id=${job.id}, userId=${job.userId}`);
     console.debug(`Payload: ${JSON.stringify(job.payload)}`);
     const user = await prisma.user.findUnique({
@@ -71,7 +65,7 @@ async function pushLeadsForUser(job) {
     }
     console.info(`🔍 Found ${properties.length} matching properties for job ${job.id}`);
     // Initialize progress tracking
-    await (0, jobProgress_1.updateJobProgress)(job.id, {
+    await updateJobProgress(job.id, {
         processed: 0,
         total: properties.length,
         status: `Found ${properties.length} properties to push`,
@@ -109,7 +103,7 @@ async function pushLeadsForUser(job) {
                 continue;
             }
             // First try to find existing contact (rate-limited)
-            const existingGhlId = await (0, rateLimiter_1.rateLimitedRequest)(() => (0, helper_1.findGhlContactByEmailOrPhone)(contact.email, contact.phone, account.privateToken, account.locationId));
+            const existingGhlId = await rateLimitedRequest(() => findGhlContactByEmailOrPhone(contact.email, contact.phone, account.privateToken, account.locationId));
             if (existingGhlId) {
                 console.info(`✓ Found existing contact in GHL: ${existingGhlId} for contact ID ${contactId}`);
                 contactIdMap[contactId] = existingGhlId;
@@ -135,7 +129,7 @@ async function pushLeadsForUser(job) {
                 else if (val === "no" || val === "false")
                     normalizedPool = "False";
             }
-            const tagsArray = (0, helper_1.buildTags)(property.tags, null);
+            const tagsArray = buildTags(property.tags, null);
             const contactPayload = {
                 locationId: account.locationId,
                 firstName: contact.firstName ?? undefined,
@@ -145,16 +139,16 @@ async function pushLeadsForUser(job) {
                 address1: property.streetAddress ?? undefined,
                 tags: tagsArray ?? undefined,
                 city: property.city ?? undefined,
-                country: (0, helper_1.normalizeCountry)(property.country) ?? undefined,
+                country: normalizeCountry(property.country) ?? undefined,
                 state: property.state ?? undefined,
-                postalCode: (0, helper_1.normalizePostalCode)(property.postalCode) ?? undefined,
+                postalCode: normalizePostalCode(property.postalCode) ?? undefined,
                 companyName: contact.companyName ?? undefined,
                 source: "ProEdge",
                 customFields: [
                     { id: "bedrooms", value: property.bedrooms || "" },
                     { id: "bathrooms", value: property.bathrooms || "" },
                     { id: "price", value: String(property.price || "") },
-                    { id: "mls_status", value: (0, helper_1.normalizeMLSStatus)(property.mlsStatus) },
+                    { id: "mls_status", value: normalizeMLSStatus(property.mlsStatus) },
                     { id: "tax_value", value: property.taxValue ?? undefined },
                     {
                         id: "first_lien_amount",
@@ -162,7 +156,7 @@ async function pushLeadsForUser(job) {
                     },
                     {
                         id: "owner_occupied",
-                        value: (0, helper_1.normalizeYesNo)(property.ownerOccupied) || "",
+                        value: normalizeYesNo(property.ownerOccupied) || "",
                     },
                     {
                         id: "contact_2_phone_1",
@@ -204,14 +198,14 @@ async function pushLeadsForUser(job) {
                     },
                     {
                         id: "parkting_type",
-                        value: helper_1.parkingMapping[property.parkingType ?? ""] ?? "Other",
+                        value: parkingMapping[property.parkingType ?? ""] ?? "Other",
                     },
                     { id: "parking_spaces", value: property.parkingSpaces ?? undefined },
                     { id: "owner_status", value: property.ownerStatus ?? undefined },
                     { id: "rental_history", value: property.rentalHistory ?? undefined },
                     {
                         id: "in_preforclosure",
-                        value: (0, helper_1.normalizeYesNo)(property.inPreforclosure) || "",
+                        value: normalizeYesNo(property.inPreforclosure) || "",
                     },
                     {
                         id: "resale_value_arv",
@@ -252,7 +246,7 @@ async function pushLeadsForUser(job) {
                     },
                     {
                         id: "loan_type",
-                        value: (0, helper_1.normalizedLoanType)(property.loanType) || "",
+                        value: normalizedLoanType(property.loanType) || "",
                     },
                     {
                         id: "loan_maturity_date",
@@ -260,7 +254,7 @@ async function pushLeadsForUser(job) {
                     },
                     {
                         id: "working_with_realtor",
-                        value: (0, helper_1.normalizeWorkingWithRealtor)(property.workingWithRealtor),
+                        value: normalizeWorkingWithRealtor(property.workingWithRealtor),
                     },
                     {
                         id: "contact_1_phone_2_dnc",
@@ -281,7 +275,7 @@ async function pushLeadsForUser(job) {
                     { id: "owner_type", value: property.ownerType ?? undefined },
                     {
                         id: "free_and_clear",
-                        value: (0, helper_1.normalizeFreeAndClear)(property.freeAndClear) || "",
+                        value: normalizeFreeAndClear(property.freeAndClear) || "",
                     },
                     {
                         id: "estimated_mtg_payment",
@@ -314,7 +308,7 @@ async function pushLeadsForUser(job) {
                     },
                     {
                         id: "household_income",
-                        value: (0, helper_1.normalizeHouseholdIncome)(property.householdIncome) ?? undefined,
+                        value: normalizeHouseholdIncome(property.householdIncome) ?? undefined,
                     },
                     { id: "owner_city", value: property.ownerCity ?? undefined },
                     {
@@ -325,7 +319,7 @@ async function pushLeadsForUser(job) {
                     },
                     {
                         id: "liquid_assets",
-                        value: (0, helper_1.normalizeLiquidAssets)(property.liquidAssets),
+                        value: normalizeLiquidAssets(property.liquidAssets),
                     },
                     {
                         id: "year_built",
@@ -333,7 +327,7 @@ async function pushLeadsForUser(job) {
                     },
                     {
                         id: "property_type",
-                        value: (0, helper_1.normalizePropertyType)(property.propertyType) || "",
+                        value: normalizePropertyType(property.propertyType) || "",
                     },
                     { id: "pool", value: normalizedPool },
                     { id: "county", value: property.county ?? undefined },
@@ -356,7 +350,7 @@ async function pushLeadsForUser(job) {
                     },
                     {
                         id: "lead_source",
-                        value: (0, helper_1.normalizeLeadSource)(property.leadSource) ?? undefined,
+                        value: normalizeLeadSource(property.leadSource) ?? undefined,
                     },
                     { id: "lot_size", value: property.lotSize ?? undefined },
                     {
@@ -372,7 +366,7 @@ async function pushLeadsForUser(job) {
             }
             try {
                 // RATE-LIMITED REQUEST
-                const resp = await (0, rateLimiter_1.rateLimitedRequest)(() => axios_1.default.post(`${GHL_BASE_URL}/contacts/`, contactPayload, {
+                const resp = await rateLimitedRequest(() => axios.post(`${GHL_BASE_URL}/contacts/`, contactPayload, {
                     headers: {
                         Authorization: `Bearer ${account.privateToken}`,
                         Accept: "application/json",
@@ -393,7 +387,7 @@ async function pushLeadsForUser(job) {
                     contactIdMap[contact.id] = ghlContactId;
                     // ADD THIS: Track progress
                     pushedContactCount++;
-                    await (0, jobProgress_1.updateJobProgress)(job.id, {
+                    await updateJobProgress(job.id, {
                         processed: pushedContactCount,
                         total: contactsToPush.size + properties.length,
                         status: `Pushed ${pushedContactCount}/${contactsToPush.size} contacts`,
@@ -405,7 +399,7 @@ async function pushLeadsForUser(job) {
             }
             catch (err) {
                 // Check if it's an Axios error with response data
-                if (axios_1.default.isAxiosError(err)) {
+                if (axios.isAxiosError(err)) {
                     if (err.response) {
                         console.error(`❌ [${account.name}] GHL Error for contact ID ${contact.id}:`, {
                             status: err.response.status,
@@ -435,7 +429,7 @@ async function pushLeadsForUser(job) {
         let associationCount = 0;
         for (const p of properties) {
             // RATE-LIMITED REQUEST
-            const existingGhlId = await (0, rateLimiter_1.rateLimitedRequest)(() => (0, helper_1.findGhlPropertyByAddress)(p.addressFull, account.privateToken, account.locationId));
+            const existingGhlId = await rateLimitedRequest(() => findGhlPropertyByAddress(p.addressFull, account.privateToken, account.locationId));
             if (existingGhlId) {
                 console.info(`Found existing property in GHL: ${existingGhlId}`);
                 let ghlContactId = contactIdMap[p.ownerId];
@@ -446,13 +440,13 @@ async function pushLeadsForUser(job) {
                     });
                     if (owner) {
                         // RATE-LIMITED REQUEST
-                        ghlContactId = await (0, rateLimiter_1.rateLimitedRequest)(() => (0, helper_1.findGhlContactByEmailOrPhone)(owner.email, owner.phone, account.privateToken, account.locationId));
+                        ghlContactId = await rateLimitedRequest(() => findGhlContactByEmailOrPhone(owner.email, owner.phone, account.privateToken, account.locationId));
                     }
                 }
                 if (ghlContactId && existingGhlId) {
                     console.info(`🔗 [${account.name}] Associating existing property ${p.id} (GHL: ${existingGhlId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`);
                     // RATE-LIMITED REQUEST
-                    await (0, rateLimiter_1.rateLimitedRequest)(() => (0, helper_1.ensureContactPropertyAssociation)(ghlContactId, existingGhlId, account.privateToken, account.locationId));
+                    await rateLimitedRequest(() => ensureContactPropertyAssociation(ghlContactId, existingGhlId, account.privateToken, account.locationId));
                     associationCount++;
                 }
                 continue; // Skip creation
@@ -471,7 +465,7 @@ async function pushLeadsForUser(job) {
                 });
                 if (owner) {
                     // RATE-LIMITED REQUEST
-                    ghlContactId = await (0, rateLimiter_1.rateLimitedRequest)(() => (0, helper_1.findGhlContactByEmailOrPhone)(owner.email, owner.phone, account.privateToken, account.locationId));
+                    ghlContactId = await rateLimitedRequest(() => findGhlContactByEmailOrPhone(owner.email, owner.phone, account.privateToken, account.locationId));
                 }
             }
             if (!ghlContactId) {
@@ -479,7 +473,7 @@ async function pushLeadsForUser(job) {
                 continue;
             }
             const customFields = {};
-            const loanTypeKey = (0, helper_1.normalizeLoanType)(p.loanType);
+            const loanTypeKey = normalizeLoanType(p.loanType);
             const fieldMappings = {
                 city: p.city,
                 state: p.state,
@@ -488,17 +482,17 @@ async function pushLeadsForUser(job) {
                 baths: p.bathrooms,
                 sq_feet: p.aboveGradeFinishedSqft,
                 free_and_clear: p.freeAndClear,
-                equity_: (0, helper_1.toNumber)(p.equity),
-                year_built: (0, helper_1.toNumber)(p.yearBuilt),
-                property_type: (0, helper_1.normalizePropertyType)(p.propertyType),
+                equity_: toNumber(p.equity),
+                year_built: toNumber(p.yearBuilt),
+                property_type: normalizePropertyType(p.propertyType),
                 seller_motivation: p.sellerMotivation,
-                in_preforclosure: (0, helper_1.normalizeYesNo)(p.inPreforclosure),
+                in_preforclosure: normalizeYesNo(p.inPreforclosure),
                 home_condition: p.homeCondition,
-                owner_occupied: (0, helper_1.normalizeYesNo)(p.ownerOccupied),
+                owner_occupied: normalizeYesNo(p.ownerOccupied),
                 loan_type: loanTypeKey ?? "",
             };
             if (p.estimatedEquity) {
-                const val = (0, helper_1.toFloat)(p.estimatedEquity);
+                const val = toFloat(p.estimatedEquity);
                 if (val !== null) {
                     customFields["estimated_equity"] = {
                         currency: "default",
@@ -507,7 +501,7 @@ async function pushLeadsForUser(job) {
                 }
             }
             if (p.estimatedMtgBalance) {
-                const val = (0, helper_1.toNumber)(p.estimatedMtgBalance);
+                const val = toNumber(p.estimatedMtgBalance);
                 if (val !== null) {
                     customFields["estimated_mtg_balance"] = {
                         currency: "default",
@@ -516,7 +510,7 @@ async function pushLeadsForUser(job) {
                 }
             }
             if (p.resaleValueArv) {
-                const val = (0, helper_1.toNumber)(p.resaleValueArv);
+                const val = toNumber(p.resaleValueArv);
                 if (val !== null) {
                     customFields["resale_value_arv"] = {
                         currency: "default",
@@ -525,7 +519,7 @@ async function pushLeadsForUser(job) {
                 }
             }
             if (p.askingPrice) {
-                const val = (0, helper_1.toNumber)(p.askingPrice);
+                const val = toNumber(p.askingPrice);
                 if (val !== null) {
                     customFields["asking_price"] = { currency: "default", value: val };
                 }
@@ -545,7 +539,7 @@ async function pushLeadsForUser(job) {
             console.debug(`📦 [${account.name}] Prepared payload for property ID ${p.id}:`, JSON.stringify(payload, null, 2));
             try {
                 // RATE-LIMITED REQUEST
-                const resp = await (0, rateLimiter_1.rateLimitedRequest)(() => axios_1.default.post(`${GHL_BASE_URL}/objects/${CUSTOM_OBJECT_KEY}/records`, payload, {
+                const resp = await rateLimitedRequest(() => axios.post(`${GHL_BASE_URL}/objects/${CUSTOM_OBJECT_KEY}/records`, payload, {
                     headers: {
                         Authorization: `Bearer ${account.privateToken}`,
                         Accept: "application/json",
@@ -555,7 +549,7 @@ async function pushLeadsForUser(job) {
                 }));
                 // After creating property in GHL, update:
                 if (resp.status === 201) {
-                    const ghlPropertyId = (0, helper_1.extractGhlId)(resp.data);
+                    const ghlPropertyId = extractGhlId(resp.data);
                     if (ghlPropertyId) {
                         await prisma.property.update({
                             where: { id: p.id },
@@ -567,14 +561,14 @@ async function pushLeadsForUser(job) {
                     }
                 }
                 if (resp.status === 201 || resp.status === 200) {
-                    const ghlPropertyId = (0, helper_1.extractGhlId)(resp.data);
+                    const ghlPropertyId = extractGhlId(resp.data);
                     if (!ghlPropertyId) {
                         console.warn(`⚠️ Created property ${p.id} but could not find GHL id in response.`);
                         console.debug("Full resp.data:", JSON.stringify(resp.data, null, 2));
                     }
                     pushedPropertyCount++;
                     console.info(`✔ Pushed property ID ${p.id} (GHL: ${ghlPropertyId})`);
-                    await (0, jobProgress_1.updateJobProgress)(job.id, {
+                    await updateJobProgress(job.id, {
                         processed: contactsToPush.size + pushedPropertyCount,
                         total: contactsToPush.size + properties.length,
                         status: `Pushed ${pushedPropertyCount}/${properties.length} properties`,
@@ -583,7 +577,7 @@ async function pushLeadsForUser(job) {
                     if (ghlPropertyId && ghlContactId) {
                         console.info(`🔗 [${account.name}] Associating property ${p.id} (GHL: ${ghlPropertyId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`);
                         // RATE-LIMITED REQUEST
-                        await (0, rateLimiter_1.rateLimitedRequest)(() => (0, helper_1.ensureContactPropertyAssociation)(ghlContactId, ghlPropertyId, account.privateToken, account.locationId));
+                        await rateLimitedRequest(() => ensureContactPropertyAssociation(ghlContactId, ghlPropertyId, account.privateToken, account.locationId));
                         associationCount++;
                     }
                     else {
@@ -596,7 +590,7 @@ async function pushLeadsForUser(job) {
             }
             catch (err) {
                 // Check if it's an Axios error
-                if (axios_1.default.isAxiosError(err)) {
+                if (axios.isAxiosError(err)) {
                     if (err.response) {
                         console.error(`❌ [${account.name}] GHL Error for property ID ${p.id}:`, {
                             status: err.response.status,

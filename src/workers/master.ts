@@ -1,15 +1,16 @@
 // src/workers/master.ts
 import { EventEmitter } from "events";
+import { Job } from "pg-boss";
 import {
   getQueueInstance,
   closeQueue,
   getDailyQueueName,
   JOB_TYPES,
+  DailyLeadAssignmentPayload,
 } from "../lib/queue";
 import { todayYYYYMMDD } from "../lib/timezone";
 import { startDailyQueueScheduler } from "../schedulers/dailyQueueScheduler";
 import { processLeadAssignment } from "../jobs/leadAssignment";
-import { PgBoss } from "pg-boss";
 
 // Configuration
 const WORKER_COUNT = parseInt(process.env.WORKER_COUNT || "10", 10);
@@ -31,7 +32,7 @@ interface WorkerMetrics {
 
 const workerMetrics = new Map<number, WorkerMetrics>();
 
-async function setupQueue(): Promise<PgBoss> {
+async function setupQueue() {
   console.log("🔧 Setting up queue...");
 
   const boss = await getQueueInstance();
@@ -47,7 +48,7 @@ async function setupQueue(): Promise<PgBoss> {
   try {
     await boss.createQueue(todayQueue);
     console.log(`✅ Daily queue created: ${todayQueue}`);
-  } catch (error) {
+  } catch {
     console.log(`ℹ️ Daily queue already exists: ${todayQueue}`);
   }
 
@@ -55,7 +56,7 @@ async function setupQueue(): Promise<PgBoss> {
   try {
     await boss.createQueue(JOB_TYPES.DELIVER_LEADS_BATCH);
     console.log(`✅ Batch queue created: ${JOB_TYPES.DELIVER_LEADS_BATCH}`);
-  } catch (error) {
+  } catch {
     console.log(
       `ℹ️ Batch queue already exists: ${JOB_TYPES.DELIVER_LEADS_BATCH}`
     );
@@ -68,7 +69,7 @@ async function startWorker(workerId: number, queueName: string): Promise<void> {
   const boss = await getQueueInstance();
 
   console.log(`🚀 Worker ${workerId} starting...`);
-  console.log(`   📍 Binding to queue: ${queueName}`);
+  console.log(`   🔍 Binding to queue: ${queueName}`);
   console.log(`   🔢 Concurrency: ${JOB_CONCURRENCY}`);
 
   // Initialize metrics
@@ -80,41 +81,52 @@ async function startWorker(workerId: number, queueName: string): Promise<void> {
   });
 
   // Subscribe to the queue with handler
-  await boss.work(queueName, { teamSize: JOB_CONCURRENCY }, async (job) => {
-    const startTime = Date.now();
-    const metrics = workerMetrics.get(workerId)!;
+  // Type the handler explicitly to handle both single job and array of jobs
+  await boss.work<DailyLeadAssignmentPayload>(
+    queueName,
+    async (
+      jobs: Job<DailyLeadAssignmentPayload> | Job<DailyLeadAssignmentPayload>[]
+    ) => {
+      const metrics = workerMetrics.get(workerId)!;
 
-    try {
-      console.log(
-        `[Worker ${workerId}] Processing job ${job.id} for user ${job.data.userId}`
-      );
+      // Normalize to array for consistent processing
+      const jobArray = Array.isArray(jobs) ? jobs : [jobs];
 
-      await processLeadAssignment(job.data);
+      for (const job of jobArray) {
+        const startTime = Date.now();
 
-      const processingTime = Date.now() - startTime;
-      metrics.jobsProcessed++;
-      metrics.totalProcessingTime += processingTime;
-      metrics.averageProcessingTime =
-        metrics.totalProcessingTime / metrics.jobsProcessed;
+        try {
+          console.log(
+            `[Worker ${workerId}] Processing job ${job.id} for user ${job.data.userId}`
+          );
 
-      console.log(
-        `[Worker ${workerId}] ✅ Job ${job.id} completed in ${processingTime}ms`
-      );
-    } catch (error) {
-      metrics.jobsFailed++;
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      console.error(
-        `[Worker ${workerId}] ❌ Job ${job.id} failed:`,
-        errorMessage
-      );
-      throw error; // Re-throw for pg-boss retry logic
+          await processLeadAssignment(job.data);
+
+          const processingTime = Date.now() - startTime;
+          metrics.jobsProcessed++;
+          metrics.totalProcessingTime += processingTime;
+          metrics.averageProcessingTime =
+            metrics.totalProcessingTime / metrics.jobsProcessed;
+
+          console.log(
+            `[Worker ${workerId}] ✅ Job ${job.id} completed in ${processingTime}ms`
+          );
+        } catch (error) {
+          metrics.jobsFailed++;
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          console.error(
+            `[Worker ${workerId}] ❌ Job ${job.id} failed:`,
+            errorMessage
+          );
+          throw error; // Re-throw for pg-boss retry logic
+        }
+      }
     }
-  });
+  );
 
   console.log(`✅ Worker ${workerId} subscribed to: ${queueName}`);
-  console.log(`ℹ️  Worker ${workerId} using default pg-boss concurrency`);
-  console.log(`   Concurrency is controlled by total number of workers`);
+  console.log(`ℹ️  Worker ${workerId} ready to process jobs`);
 
   activeWorkers.add(workerId);
   console.log(`✅ Worker ${workerId} is now processing jobs`);
