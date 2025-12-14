@@ -1,4 +1,4 @@
-// src/lib/workerManager.ts - FULLY FIXED VERSION
+// src/lib/workerManager.ts - WITH ALERT INTEGRATION
 import {
   getQueueInstance,
   JOB_TYPES,
@@ -24,6 +24,7 @@ import {
   markIdempotencyFailed,
 } from "./idempotency";
 import { pushLeadsForUser } from "./pushLeads";
+import { sendJobFailureAlert } from "./alerts"; // ← NEW: Alert system import
 
 import * as PgBoss from "pg-boss";
 
@@ -256,10 +257,31 @@ export class WorkerManager {
 
       this.metrics.jobsFailed++;
 
+      // ========================================================================
+      // ✅ NEW: Alert integration - Get current job attempt count
+      // ========================================================================
+      const dbJob = await prisma.job.findUnique({
+        where: { id: job.id },
+        select: { attempts: true, maxAttempts: true },
+      });
+
+      const attempts = (dbJob?.attempts || 0) + 1;
+      const maxAttempts = dbJob?.maxAttempts || 3;
+
+      // Determine if job has exceeded max attempts
+      const isFinalFailure = attempts >= maxAttempts;
+      const newStatus = isFinalFailure ? "failed" : "pending";
+
+      console.log(
+        `   📊 Attempt ${attempts}/${maxAttempts} - Status: ${newStatus}`
+      );
+
+      // Mark idempotency as failed
       const queueName = this.useDailyQueue ? getTodayQueueName() : job.name;
       await markIdempotencyFailed(queueName, payload.idempotencyKey, error);
 
-      await prisma.job
+      // Update job in database
+      const updatedJob = await prisma.job
         .upsert({
           where: { id: job.id },
           create: {
@@ -267,16 +289,53 @@ export class WorkerManager {
             type: job.name,
             payload: job.data as unknown as Prisma.InputJsonValue,
             userId: payload.userId,
-            status: "failed",
+            status: newStatus,
             lastError: errorMessage,
-            attempts: 1,
+            attempts,
+            maxAttempts,
           },
           update: {
-            status: "failed",
+            status: newStatus,
             lastError: errorMessage,
+            attempts,
           },
         })
-        .catch((e) => console.error("Failed to update job status:", e));
+        .catch((e) => {
+          console.error("Failed to update job status:", e);
+          return null;
+        });
+
+      // ========================================================================
+      // ✅ NEW: Send alert if max attempts reached
+      // ========================================================================
+      if (isFinalFailure && updatedJob) {
+        console.log(
+          `🚨 Job ${job.id} exceeded max attempts (${attempts}/${maxAttempts}), sending alerts...`
+        );
+
+        try {
+          await sendJobFailureAlert(updatedJob);
+          console.log(`✅ Alert sent successfully for job ${job.id}`);
+        } catch (alertError) {
+          // Don't let alert failures crash the worker
+          const alertErrorMsg =
+            alertError instanceof Error
+              ? alertError.message
+              : String(alertError);
+          console.error(
+            `⚠️ Failed to send alert for job ${job.id}:`,
+            alertErrorMsg
+          );
+        }
+      } else if (isFinalFailure) {
+        console.warn(
+          `⚠️ Job ${job.id} failed but could not retrieve from database for alert`
+        );
+      } else {
+        console.log(
+          `🔄 Job ${job.id} will be retried (${attempts}/${maxAttempts})`
+        );
+      }
 
       throw error;
     } finally {
@@ -352,7 +411,27 @@ export class WorkerManager {
 
       this.metrics.jobsFailed++;
 
-      await prisma.job
+      // ========================================================================
+      // ✅ NEW: Alert integration - Get current job attempt count
+      // ========================================================================
+      const dbJob = await prisma.job.findUnique({
+        where: { id: job.id },
+        select: { attempts: true, maxAttempts: true },
+      });
+
+      const attempts = (dbJob?.attempts || 0) + 1;
+      const maxAttempts = dbJob?.maxAttempts || 3;
+
+      // Determine if job has exceeded max attempts
+      const isFinalFailure = attempts >= maxAttempts;
+      const newStatus = isFinalFailure ? "failed" : "pending";
+
+      console.log(
+        `   📊 Attempt ${attempts}/${maxAttempts} - Status: ${newStatus}`
+      );
+
+      // Update job in database
+      const updatedJob = await prisma.job
         .upsert({
           where: { id: job.id },
           create: {
@@ -360,16 +439,53 @@ export class WorkerManager {
             type: job.name,
             payload: job.data as unknown as Prisma.InputJsonValue,
             userId: payload.userId,
-            status: "failed",
+            status: newStatus,
             lastError: errorMessage,
-            attempts: 1,
+            attempts,
+            maxAttempts,
           },
           update: {
-            status: "failed",
+            status: newStatus,
             lastError: errorMessage,
+            attempts,
           },
         })
-        .catch((e) => console.error("Failed to update job status:", e));
+        .catch((e) => {
+          console.error("Failed to update job status:", e);
+          return null;
+        });
+
+      // ========================================================================
+      // ✅ NEW: Send alert if max attempts reached
+      // ========================================================================
+      if (isFinalFailure && updatedJob) {
+        console.log(
+          `🚨 Batch job ${job.id} exceeded max attempts (${attempts}/${maxAttempts}), sending alerts...`
+        );
+
+        try {
+          await sendJobFailureAlert(updatedJob);
+          console.log(`✅ Alert sent successfully for batch job ${job.id}`);
+        } catch (alertError) {
+          // Don't let alert failures crash the worker
+          const alertErrorMsg =
+            alertError instanceof Error
+              ? alertError.message
+              : String(alertError);
+          console.error(
+            `⚠️ Failed to send alert for batch job ${job.id}:`,
+            alertErrorMsg
+          );
+        }
+      } else if (isFinalFailure) {
+        console.warn(
+          `⚠️ Batch job ${job.id} failed but could not retrieve from database for alert`
+        );
+      } else {
+        console.log(
+          `🔄 Batch job ${job.id} will be retried (${attempts}/${maxAttempts})`
+        );
+      }
 
       throw error;
     } finally {
