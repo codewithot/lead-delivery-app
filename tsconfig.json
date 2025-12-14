@@ -20,7 +20,7 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "helper.js"],
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "helpers/helper.js"],
   "exclude": ["node_modules"]
 }
 

@@ -311,9 +311,13 @@ export async function provisionWithRetry(
 }
 
 /**
- * CLI entry point
+ * CLI entry point - ESM compatible
  */
-if (require.main === module) {
+const isMainModule =
+  process.argv[1] === new URL(import.meta.url).pathname ||
+  process.argv[1] === new URL(import.meta.url).pathname.replace(/\//g, "\\");
+
+if (isMainModule) {
   const args = process.argv.slice(2);
   const dryRun = args.includes("--dry-run");
   const withRetry = args.includes("--retry");

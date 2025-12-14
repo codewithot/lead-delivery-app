@@ -36,19 +36,19 @@ export async function closeQueue(): Promise<void> {
 export const JOB_TYPES = {
   DELIVER_LEADS: "deliver-leads",
   DELIVER_LEADS_BATCH: "deliver-leads-batch",
-  DAILY_LEAD_ASSIGNMENT: "leads:assign", // Base name, will be suffixed with :YYYYMMDD
+  DAILY_LEAD_ASSIGNMENT: "leads_assign", // Changed from "leads:assign" - underscores instead of colons
 } as const;
 
 export type JobType = (typeof JOB_TYPES)[keyof typeof JOB_TYPES];
 
 /**
  * Generate daily queue name with date suffix
- * @param baseQueueName - Base queue name (e.g., "leads:assign")
+ * @param baseQueueName - Base queue name (e.g., "leads_assign")
  * @param date - Date in YYYYMMDD format
- * @returns Full queue name (e.g., "leads:assign:20250108")
+ * @returns Full queue name (e.g., "leads_assign_20250108")
  */
 export function getDailyQueueName(baseQueueName: string, date: string): string {
-  return `${baseQueueName}:${date}`;
+  return `${baseQueueName}_${date}`; // Changed from colon to underscore
 }
 
 /**

@@ -25,7 +25,6 @@ export function startDailyQueueScheduler() {
     },
     {
       timezone,
-      scheduled: true,
     }
   );
 
@@ -46,7 +45,6 @@ export function startDailyQueueScheduler() {
     },
     {
       timezone,
-      scheduled: true,
     }
   );
 
@@ -67,7 +65,6 @@ export function startDailyQueueScheduler() {
     },
     {
       timezone,
-      scheduled: true,
     }
   );
 

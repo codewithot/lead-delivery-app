@@ -9,8 +9,10 @@
     "build:workers": "tsc -p tsconfig.workers.json",
     "start": "next start",
     "lint": "next lint",
-    "workers": "ts-node src/workers/master.ts",
-    "worker:standalone": "ts-node src/workers/standalone.ts",
+    "workers": "node --max-old-space-size=768 --expose-gc --import tsx src/workers/master.ts",
+    "worker:prod": "node --max-old-space-size=768 --expose-gc dist/workers/master.js",
+    "worker:standalone": "node --max-old-space-size=768 --expose-gc --import tsx src/workers/standalone.ts",
+    "provision-queues": "tsx scripts/provision-queues.ts",
     "test:webhook": "curl -X POST http://localhost:3000/api/ingest-complete -H 'Content-Type: application/json' -H 'x-hook-secret: your-webhook-secret' -d '{\"runId\": \"test-123\", \"ingestedAt\": \"2025-01-01T00:00:00Z\"}'"
   },
   "dependencies": {
