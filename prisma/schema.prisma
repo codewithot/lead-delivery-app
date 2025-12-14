@@ -41,6 +41,56 @@ model UserSettings {
   User        User     @relation(fields: [userId], references: [id])
 }
 
+
+
+model Contact {
+  id                Int        @id @default(autoincrement())
+  createdAt         DateTime   @default(now())
+  additionalEmails  String?    @map("Additional Emails")
+  additionalEmails1 String?    @map("Additional Emails.1")
+  additionalPhones  String?    @map("Additional Phones")
+  additionalPhones1 String?    @map("Additional Phones.1")
+  businessName      String?    @map("Business Name")
+  companyName       String?    @map("Company Name")
+  contactId         String     @unique @map("Contact Id")
+  email             String?    @map("Email")
+  firstName         String?    @map("First Name")
+  lastName          String?    @map("Last Name")
+  phone             String?    @map("Phone")
+  pushed            Boolean    @default(false)
+  ghlContactId      String? @unique
+  properties        Property[] @relation("ContactProperties")
+}
+model ZipCode {
+  // Primary key, mapped to the 'zip' column in the CSV
+  code           String   @id @map("zip")
+  // Geographical coordinates
+  latitude       Float    @map("lat")
+  longitude      Float    @map("lng")
+  // City and State information
+  city           String
+  stateId        String   @map("state_id")
+  stateName      String   @map("state_name")
+  // Boolean flags, converted from "TRUE"/"FALSE" strings
+  zcta           Boolean
+  imprecise      Boolean
+  military       Boolean
+  // Population and density, nullable as some entries might be empty or zero
+  population     Int?
+  density        Float?
+  // County information
+  countyFips     String   @map("county_fips")
+  countyName     String   @map("county_name")
+  // Complex string formats for county data
+  countyWeights  String   @map("county_weights") // JSON-like string
+  countyNamesAll String   @map("county_names_all") // Pipe-separated string
+  countyFipsAll  String   @map("county_fips_all") // Pipe-separated string
+  // Other attributes
+  parentZcta     String?  @map("parent_zcta") // Nullable
+  timezone       String
+  updatedAt      DateTime @updatedAt
+}
+
 model Property {
   id      Int     @id @default(autoincrement())
   ownerId Int
@@ -99,7 +149,7 @@ model Property {
   aboveGradeFinishedSqft String?  @map("Above Grade Finished SqFt")
   bathrooms              String?  @map("Bathrooms")
   bedrooms               String?  @map("Bedrooms")
-  price                  Int?  @map("Price")
+  price                  Int?     @map("Price")
   lotSize                String?  @map("Lot Size")
   yearBuilt              String?  @map("Year Built")
   propertyType           String?  @map("Property Type")
@@ -129,59 +179,13 @@ model Property {
   county                 String?  @map("County")
   resaleValueArv         String?  @map("Resale Value (ARV)")
   data                   String?  @map("Data")
-  ingestedAt    DateTime @default(now())
+  ingestedAt             DateTime @default(now())
   pushed                 Boolean  @default(false)
   createdAt              DateTime @default(now())
 
   @@unique([ownerId, addressFull], name: "owner_address_unique")
-}
-
-model Contact {
-  id                Int        @id @default(autoincrement())
-  createdAt         DateTime   @default(now())
-  additionalEmails  String?    @map("Additional Emails")
-  additionalEmails1 String?    @map("Additional Emails.1")
-  additionalPhones  String?    @map("Additional Phones")
-  additionalPhones1 String?    @map("Additional Phones.1")
-  businessName      String?    @map("Business Name")
-  companyName       String?    @map("Company Name")
-  contactId         String     @unique @map("Contact Id")
-  email             String?    @map("Email")
-  firstName         String?    @map("First Name")
-  lastName          String?    @map("Last Name")
-  phone             String?    @map("Phone")
-  pushed            Boolean    @default(false)
-  ghlContactId      String? @unique
-  properties        Property[] @relation("ContactProperties")
-}
-model ZipCode {
-  // Primary key, mapped to the 'zip' column in the CSV
-  code           String   @id @map("zip")
-  // Geographical coordinates
-  latitude       Float    @map("lat")
-  longitude      Float    @map("lng")
-  // City and State information
-  city           String
-  stateId        String   @map("state_id")
-  stateName      String   @map("state_name")
-  // Boolean flags, converted from "TRUE"/"FALSE" strings
-  zcta           Boolean
-  imprecise      Boolean
-  military       Boolean
-  // Population and density, nullable as some entries might be empty or zero
-  population     Int?
-  density        Float?
-  // County information
-  countyFips     String   @map("county_fips")
-  countyName     String   @map("county_name")
-  // Complex string formats for county data
-  countyWeights  String   @map("county_weights") // JSON-like string
-  countyNamesAll String   @map("county_names_all") // Pipe-separated string
-  countyFipsAll  String   @map("county_fips_all") // Pipe-separated string
-  // Other attributes
-  parentZcta     String?  @map("parent_zcta") // Nullable
-  timezone       String
-  updatedAt      DateTime @updatedAt
+  @@index([price])
+  @@index([postalCode, price, pushed])
 }
 
 model Job {
@@ -198,6 +202,8 @@ model Job {
   updatedAt   DateTime  @updatedAt
   userId      String
   User        User      @relation(fields: [userId], references: [id])
+
+  @@index([status, attempts])
 }
 
 model WebhookLog {
