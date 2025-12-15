@@ -6,6 +6,13 @@ const API_VERSION = "2021-07-28";
 const prisma = new PrismaClient();
 const CUSTOM_OBJECT_KEY = "custom_objects.properties";
 
+import {
+  normalizeEmail,
+  normalizePhone,
+  normalizeAddress,
+  normalizeAddressForFuzzyMatch,
+} from "./normalizers";
+
 interface CountriesLib {
   registerLocale(locale: unknown): void;
   isValid(code: string): boolean;
@@ -1054,6 +1061,28 @@ export async function findGhlContactByEmailOrPhone(
     return undefined;
   }
 
+  // ✅ NEW: Normalize email and phone before searching
+  const emailNormResult = normalizeEmail(email);
+  const phoneNormResult = normalizePhone(phone, "US");
+
+  // Log normalization results for debugging
+  if (emailNormResult.warnings.length > 0) {
+    console.debug(`📧 Email normalization warnings:`, emailNormResult.warnings);
+  }
+  if (phoneNormResult.warnings.length > 0) {
+    console.debug(`📱 Phone normalization warnings:`, phoneNormResult.warnings);
+  }
+
+  // Use normalized values for search
+  const normalizedEmail = emailNormResult.normalized;
+  const normalizedPhone = phoneNormResult.normalized;
+
+  console.debug(
+    `🔍 Searching with normalized values - Email: ${
+      normalizedEmail || "N/A"
+    }, Phone: ${normalizedPhone || "N/A"}`
+  );
+
   try {
     const headers = {
       Authorization: `Bearer ${privateToken}`,
@@ -1061,9 +1090,9 @@ export async function findGhlContactByEmailOrPhone(
       Accept: "application/json",
     };
 
-    // 1️⃣ Try searching by email first (if available)
-    if (email) {
-      console.debug(`📧 Searching GHL by email: ${email}`);
+    // 1️⃣ Try searching by normalized email first (if available and valid)
+    if (normalizedEmail && emailNormResult.isValid) {
+      console.debug(`📧 Searching GHL by normalized email: ${normalizedEmail}`);
       try {
         const resp = await axios.get(
           `${GHL_BASE_URL}/contacts/search/duplicate`,
@@ -1071,7 +1100,7 @@ export async function findGhlContactByEmailOrPhone(
             headers,
             params: {
               locationId,
-              email, // Email is already URL-safe in most cases
+              email: normalizedEmail,
             },
           }
         );
@@ -1085,19 +1114,14 @@ export async function findGhlContactByEmailOrPhone(
         const axiosError = axios.isAxiosError(emailError) ? emailError : null;
         const status = axiosError?.response?.status;
 
-        // 404 means no duplicate found
         if (status === 404) {
           console.debug(`ℹ️ No contact found by email (404)`);
-        }
-        // 422 validation error
-        else if (status === 422) {
+        } else if (status === 422) {
           console.warn(
             `⚠️ Email search validation error (422):`,
             axiosError?.response?.data
           );
-        }
-        // Other errors
-        else {
+        } else {
           const errorMessage =
             emailError instanceof Error
               ? emailError.message
@@ -1111,11 +1135,36 @@ export async function findGhlContactByEmailOrPhone(
           }
         }
       }
+
+      // ✅ NEW: If normalized email search failed, try original email as fallback
+      if (normalizedEmail !== email && email) {
+        console.debug(`🔄 Trying original email as fallback: ${email}`);
+        try {
+          const resp = await axios.get(
+            `${GHL_BASE_URL}/contacts/search/duplicate`,
+            {
+              headers,
+              params: {
+                locationId,
+                email: email.trim(),
+              },
+            }
+          );
+
+          const contact = resp.data?.contact || resp.data;
+          if (contact?.id) {
+            console.info(`✅ Found contact by original email: ${contact.id}`);
+            return contact.id;
+          }
+        } catch {
+          // Ignore fallback errors
+        }
+      }
     }
 
-    // 2️⃣ Try searching by phone using 'number' parameter (if email search failed)
-    if (phone) {
-      console.debug(`📱 Searching GHL by phone: ${phone}`);
+    // 2️⃣ Try searching by normalized phone (if email search failed and phone is valid)
+    if (normalizedPhone && phoneNormResult.isValid) {
+      console.debug(`📱 Searching GHL by normalized phone: ${normalizedPhone}`);
       try {
         const resp = await axios.get(
           `${GHL_BASE_URL}/contacts/search/duplicate`,
@@ -1123,9 +1172,8 @@ export async function findGhlContactByEmailOrPhone(
             headers,
             params: {
               locationId,
-              number: phone, // Note: parameter is 'number' not 'phone'
+              number: normalizedPhone,
             },
-            // Axios automatically URL-encodes params
           }
         );
 
@@ -1138,19 +1186,14 @@ export async function findGhlContactByEmailOrPhone(
         const axiosError = axios.isAxiosError(phoneError) ? phoneError : null;
         const status = axiosError?.response?.status;
 
-        // 404 means no duplicate found
         if (status === 404) {
           console.debug(`ℹ️ No contact found by phone (404)`);
-        }
-        // 422 validation error
-        else if (status === 422) {
+        } else if (status === 422) {
           console.warn(
             `⚠️ Phone search validation error (422):`,
             axiosError?.response?.data
           );
-        }
-        // Other errors
-        else {
+        } else {
           const errorMessage =
             phoneError instanceof Error
               ? phoneError.message
@@ -1162,6 +1205,31 @@ export async function findGhlContactByEmailOrPhone(
           if (status === 401 || status === 403) {
             throw phoneError;
           }
+        }
+      }
+
+      // ✅ NEW: If normalized phone search failed, try original phone as fallback
+      if (normalizedPhone !== phone?.replace(/\D/g, "") && phone) {
+        console.debug(`🔄 Trying original phone as fallback: ${phone}`);
+        try {
+          const resp = await axios.get(
+            `${GHL_BASE_URL}/contacts/search/duplicate`,
+            {
+              headers,
+              params: {
+                locationId,
+                number: phone.trim(),
+              },
+            }
+          );
+
+          const contact = resp.data?.contact || resp.data;
+          if (contact?.id) {
+            console.info(`✅ Found contact by original phone: ${contact.id}`);
+            return contact.id;
+          }
+        } catch {
+          // Ignore fallback errors
         }
       }
     }
@@ -1178,8 +1246,8 @@ export async function findGhlContactByEmailOrPhone(
     console.error(`❌ Critical error searching for contact:`, {
       error: errorMsg,
       status,
-      email: email || "N/A",
-      phone: phone || "N/A",
+      email: normalizedEmail || "N/A",
+      phone: normalizedPhone || "N/A",
       responseData: axiosError?.response?.data,
     });
 
@@ -1202,7 +1270,29 @@ export async function findGhlPropertyByAddress(
     return undefined;
   }
 
-  console.info(`🏠 Searching for existing property: ${address}`);
+  // ✅ NEW: Normalize address before searching
+  const addressNormResult = normalizeAddress(address);
+
+  // Log normalization results for debugging
+  if (addressNormResult.warnings.length > 0) {
+    console.debug(
+      `🏠 Address normalization warnings:`,
+      addressNormResult.warnings
+    );
+  }
+
+  const normalizedAddress = addressNormResult.normalized;
+
+  if (!normalizedAddress) {
+    console.warn(`⚠️ Address normalization failed: ${address}`);
+    // Fall back to original address
+  }
+
+  const searchAddress = normalizedAddress || address;
+
+  console.info(`🏠 Searching for existing property: ${searchAddress}`);
+  console.debug(`🔍 Original address: ${address}`);
+  console.debug(`🔍 Normalized address: ${normalizedAddress}`);
 
   try {
     const headers = {
@@ -1212,15 +1302,14 @@ export async function findGhlPropertyByAddress(
       "Content-Type": "application/json",
     };
 
-    // Use POST to search custom object records
-    // Note: Make sure "address" is configured as a searchable property in your custom object schema
+    // ✅ IMPROVED: Try normalized address first
     const resp = await axios.post(
       `${GHL_BASE_URL}/objects/${CUSTOM_OBJECT_KEY}/records/search`,
       {
         locationId,
         page: 1,
-        pageLimit: 1, // Only need the first match
-        query: address, // Search by address - ensure address is a searchable property
+        pageLimit: 10, // ✅ Get more results for better matching
+        query: searchAddress,
       },
       {
         headers,
@@ -1229,12 +1318,75 @@ export async function findGhlPropertyByAddress(
 
     const records = resp.data?.records || [];
 
-    if (records.length > 0 && records[0]?.id) {
-      console.info(`✅ Found existing property: ${records[0].id}`);
+    if (records.length > 0) {
+      // ✅ NEW: If we have multiple results, try to find exact match
+      for (const record of records) {
+        const recordAddress = record.properties?.address;
+
+        if (!recordAddress) continue;
+
+        // Try exact normalized match
+        const recordNormalized = normalizeAddress(recordAddress).normalized;
+
+        if (recordNormalized && recordNormalized === normalizedAddress) {
+          console.info(
+            `✅ Found exact match property: ${record.id} (normalized)`
+          );
+          return record.id;
+        }
+
+        // ✅ NEW: Try fuzzy match as fallback
+        const fuzzy1 = normalizeAddressForFuzzyMatch(address);
+        const fuzzy2 = normalizeAddressForFuzzyMatch(recordAddress);
+
+        if (fuzzy1 && fuzzy2 && fuzzy1 === fuzzy2) {
+          console.info(
+            `✅ Found fuzzy match property: ${record.id} (fuzzy match)`
+          );
+          console.debug(`   Original: ${address}`);
+          console.debug(`   Matched: ${recordAddress}`);
+          return record.id;
+        }
+      }
+
+      // If no exact or fuzzy match, return first result
+      console.info(
+        `✅ Found property (first result): ${records[0].id} (no exact match)`
+      );
+      console.warn(
+        `⚠️ No exact match found, using first search result. Consider manual verification.`
+      );
       return records[0].id;
     }
 
-    console.debug(`ℹ️ No property found with address: ${address}`);
+    // ✅ NEW: If normalized search failed, try original address as fallback
+    if (normalizedAddress !== address && normalizedAddress) {
+      console.debug(`🔄 Trying original address as fallback: ${address}`);
+
+      const fallbackResp = await axios.post(
+        `${GHL_BASE_URL}/objects/${CUSTOM_OBJECT_KEY}/records/search`,
+        {
+          locationId,
+          page: 1,
+          pageLimit: 1,
+          query: address,
+        },
+        {
+          headers,
+        }
+      );
+
+      const fallbackRecords = fallbackResp.data?.records || [];
+
+      if (fallbackRecords.length > 0 && fallbackRecords[0]?.id) {
+        console.info(
+          `✅ Found property using original address: ${fallbackRecords[0].id}`
+        );
+        return fallbackRecords[0].id;
+      }
+    }
+
+    console.debug(`ℹ️ No property found with address: ${searchAddress}`);
     return undefined;
   } catch (error) {
     const axiosError = axios.isAxiosError(error) ? error : null;
@@ -1242,12 +1394,10 @@ export async function findGhlPropertyByAddress(
     const status = axiosError?.response?.status;
     const errorData = axiosError?.response?.data;
 
-    // Log different error types
     if (status === 404) {
       console.debug(`ℹ️ No property found (404)`);
     } else if (status === 400) {
       console.warn(`⚠️ Bad request searching for property:`, errorData);
-      // This might mean 'address' is not configured as a searchable property
     } else if (status === 422) {
       console.warn(`⚠️ Validation error searching for property:`, errorData);
     } else if (status === 401 || status === 403) {
@@ -1260,7 +1410,7 @@ export async function findGhlPropertyByAddress(
       console.error(`❌ Error searching for property:`, {
         status,
         error: errorData || errorInstance?.message || String(error),
-        address,
+        address: searchAddress,
       });
     }
 
