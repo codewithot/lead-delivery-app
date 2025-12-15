@@ -21,6 +21,17 @@ type Job = {
   } | null;
 };
 
+// ✅ NEW: Plan usage type
+type PlanUsage = {
+  planLimit: number;
+  pushedToday: number;
+  remaining: number;
+  availableCount: number;
+  percentageUsed: number;
+  canPushMore: boolean;
+  lastUpdated: string;
+};
+
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function DashboardPage() {
@@ -30,6 +41,15 @@ export default function DashboardPage() {
   const { data: jobs, error } = useSWR<Job[]>(
     status === "authenticated" ? "/api/jobs" : null,
     fetcher
+  );
+
+  // ✅ NEW: Fetch plan usage data
+  const { data: planUsage, error: planUsageError } = useSWR<PlanUsage>(
+    status === "authenticated" ? "/api/plan-usage" : null,
+    fetcher,
+    {
+      refreshInterval: 30000, // Refresh every 30 seconds
+    }
   );
 
   useEffect(() => {
@@ -50,6 +70,7 @@ export default function DashboardPage() {
       const interval = setInterval(() => {
         console.log("🔄 Refreshing jobs...");
         mutate("/api/jobs");
+        mutate("/api/plan-usage"); // ✅ Also refresh plan usage
       }, 5000);
 
       return () => clearInterval(interval);
@@ -121,7 +142,6 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          {/* ✅ NEW: Failed Jobs Link */}
           <Link
             href="/admin/failed-jobs"
             className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 transition-colors font-medium"
@@ -143,6 +163,105 @@ export default function DashboardPage() {
         </div>
       </header>
 
+      {/* ✅ UPDATED: Plan Usage Card with Real Data */}
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-6 mb-6">
+        {planUsageError ? (
+          // Error state
+          <div className="text-center py-4">
+            <p className="text-red-700 font-medium">
+              ⚠️ Failed to load plan usage
+            </p>
+            <button
+              onClick={() => mutate("/api/plan-usage")}
+              className="mt-2 text-sm text-blue-600 hover:text-blue-800 hover:underline"
+            >
+              Retry
+            </button>
+          </div>
+        ) : !planUsage ? (
+          // Loading state
+          <div className="flex items-center justify-center py-4">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mr-3"></div>
+            <p className="text-gray-600">Loading plan usage...</p>
+          </div>
+        ) : (
+          // Data loaded successfully
+          <>
+            <div className="flex justify-between items-start">
+              <div>
+                <h2 className="text-xl font-bold text-blue-900 mb-2">
+                  📊 Plan Usage
+                </h2>
+                <p className="text-sm text-gray-600">
+                  Your current plan limit and daily usage
+                </p>
+              </div>
+              <div className="text-right">
+                <div className="text-3xl font-bold text-blue-600">
+                  {planUsage.pushedToday} / {planUsage.planLimit}
+                </div>
+                <p className="text-xs text-gray-500">properties pushed today</p>
+                {planUsage.availableCount > 0 && (
+                  <p className="text-xs text-green-600 mt-1">
+                    {planUsage.availableCount} available to push
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="mt-4">
+              <div className="w-full bg-gray-200 rounded-full h-3">
+                <div
+                  className={`h-3 rounded-full transition-all duration-300 ${
+                    planUsage.percentageUsed >= 100
+                      ? "bg-red-600"
+                      : planUsage.percentageUsed >= 80
+                      ? "bg-yellow-600"
+                      : "bg-blue-600"
+                  }`}
+                  style={{
+                    width: `${Math.min(100, planUsage.percentageUsed)}%`,
+                  }}
+                />
+              </div>
+              <div className="flex justify-between mt-1 text-xs text-gray-500">
+                <span>0</span>
+                <span>{planUsage.percentageUsed}% used</span>
+                <span>Limit: {planUsage.planLimit}</span>
+              </div>
+            </div>
+
+            {/* Status Messages */}
+            <div className="mt-3">
+              {planUsage.percentageUsed >= 100 ? (
+                <div className="flex items-center text-sm text-red-700 bg-red-50 rounded-md px-3 py-2">
+                  <span className="mr-2">🚫</span>
+                  <span className="font-medium">
+                    Daily limit reached. Resets tomorrow.
+                  </span>
+                </div>
+              ) : planUsage.percentageUsed >= 80 ? (
+                <div className="flex items-center text-sm text-yellow-700 bg-yellow-50 rounded-md px-3 py-2">
+                  <span className="mr-2">⚠️</span>
+                  <span className="font-medium">
+                    {planUsage.remaining} properties remaining today
+                  </span>
+                </div>
+              ) : planUsage.canPushMore && planUsage.availableCount > 0 ? (
+                <div className="flex items-center text-sm text-green-700 bg-green-50 rounded-md px-3 py-2">
+                  <span className="mr-2">✅</span>
+                  <span className="font-medium">
+                    Ready to push more properties
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Jobs Table */}
       {!Array.isArray(jobs) ? (
         <div className="text-center py-8">
           <p className="text-red-700 text-lg">Jobs data is unavailable.</p>

@@ -1,7 +1,13 @@
-import { PrismaClient, type Job, type UserSettings } from "@prisma/client";
+import {
+  PrismaClient,
+  type Job,
+  type UserSettings,
+  type Property,
+  type Contact,
+} from "@prisma/client";
 import axios from "axios";
 import { rateLimitedRequest } from "./rateLimiter";
-import { getValidAccessToken } from "./ghlClient"; // ← CHANGE 1: Added OAuth token refresh import
+import { getValidAccessToken } from "./ghlClient";
 import {
   ensureContactPropertyAssociation,
   toNumber,
@@ -31,15 +37,30 @@ const GHL_BASE_URL = "https://services.leadconnectorhq.com";
 const CUSTOM_OBJECT_KEY = "custom_objects.properties";
 const API_VERSION = "2021-07-28";
 
-// ← CHANGE 2: REMOVED entire GHL_ACCOUNTS array (lines 33-58 deleted)
-// This was a security risk - hardcoded credentials shared across all users
+// ✅ Payload type for dual-mode support
+interface PushLeadsPayload {
+  userId: string;
+
+  // Daily queue mode fields
+  contactId?: number;
+  propertyIds?: number[];
+  contact?: Contact;
+  properties?: (Property & { owner: Contact | null })[];
+
+  // Old webhook mode fields
+  ingestedAt?: string;
+  runId?: string;
+  batchIndex?: number;
+  batchSize?: number;
+  totalBatches?: number;
+}
 
 export async function pushLeadsForUser(job: Job) {
   console.info(`▶ Starting job id=${job.id}, userId=${job.userId}`);
   console.debug(`Payload: ${JSON.stringify(job.payload)}`);
 
   // ========================================================================
-  // CHANGE 3: Added OAuth token retrieval
+  // STEP 1: Get user and settings
   // ========================================================================
   const user = await prisma.user.findUnique({
     where: { id: job.userId },
@@ -50,37 +71,86 @@ export async function pushLeadsForUser(job: Job) {
     throw new Error("Missing user or user settings");
   }
 
-  // ← CHANGE 4: Validate locationId exists
   if (!user.locationId) {
     throw new Error("User has no GHL locationId configured");
   }
 
-  // ← CHANGE 5: Get user's OAuth access token (auto-refreshes if needed)
   const accessToken = await getValidAccessToken(user);
   const locationId = user.locationId;
+  const settings = user.settings as UserSettings;
 
   console.info(`🔑 Using OAuth token for user ${user.email || user.id}`);
   console.info(`📍 Location ID: ${locationId}`);
 
-  const settings = user.settings as UserSettings;
+  // ========================================================================
+  // STEP 2: Get properties - DUAL-MODE LOGIC WITH LIMIT CALCULATION
+  // ========================================================================
+  const payload = job.payload as unknown as PushLeadsPayload; // ✅ Fixed type casting
+  let properties: (Property & { owner: Contact | null })[];
+  let isPreIdentified = false;
 
-  // ========================================================================
-  // STEP 1: Fetch all properties that need to be pushed
-  // Properties drive the process - only their owners will be pushed
-  // ========================================================================
-  const properties = await prisma.property.findMany({
-    where: {
-      price: {
-        gte: settings.priceMin ?? 0,
-        lte: settings.priceMax ?? Number.MAX_SAFE_INTEGER,
+  // Check if this is daily queue mode (properties already identified)
+  if (
+    payload.properties &&
+    Array.isArray(payload.properties) &&
+    payload.properties.length > 0
+  ) {
+    console.info(
+      `📦 Using pre-identified properties from daily queue (${payload.properties.length} properties)`
+    );
+    properties = payload.properties;
+    isPreIdentified = true;
+  } else {
+    // Webhook mode - query database WITH REMAINING LIMIT
+    console.info(`🔍 Fetching properties from database (webhook mode)`);
+
+    // ✅ Calculate remaining limit for today
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const alreadyPushed = await prisma.property.count({
+      where: {
+        pushed: true,
+        price: {
+          gte: settings.priceMin ?? 0,
+          lte: settings.priceMax ?? Number.MAX_SAFE_INTEGER,
+        },
+        postalCode: { in: settings.zipCodes },
+        pushedAt: {
+          gte: todayStart,
+        },
       },
-      postalCode: { in: settings.zipCodes },
-      pushed: false,
-    },
-    include: {
-      owner: true,
-    },
-  });
+    });
+
+    const remainingLimit = Math.max(0, settings.planLimit - alreadyPushed);
+
+    if (remainingLimit === 0) {
+      console.info("✔ Plan limit reached, nothing to push");
+      return;
+    }
+
+    properties = await prisma.property.findMany({
+      where: {
+        price: {
+          gte: settings.priceMin ?? 0,
+          lte: settings.priceMax ?? Number.MAX_SAFE_INTEGER,
+        },
+        postalCode: { in: settings.zipCodes },
+        pushed: false,
+      },
+      include: {
+        owner: true,
+      },
+      take: remainingLimit, // ✅ Use remaining limit instead of full planLimit
+      orderBy: {
+        createdAt: "asc", // ✅ FIFO - oldest properties first
+      },
+    });
+
+    console.info(
+      `📊 Plan limit: ${settings.planLimit}, Already pushed: ${alreadyPushed}, Remaining: ${remainingLimit}, Found: ${properties.length} properties`
+    );
+  }
 
   if (!properties.length) {
     console.info("✔ Nothing to push");
@@ -88,7 +158,7 @@ export async function pushLeadsForUser(job: Job) {
   }
 
   console.info(
-    `🔍 Found ${properties.length} matching properties for job ${job.id}`
+    `🔍 Processing ${properties.length} properties for job ${job.id} (Pre-identified: ${isPreIdentified})`
   );
 
   // Initialize progress tracking
@@ -99,8 +169,7 @@ export async function pushLeadsForUser(job: Job) {
   }).catch((err) => console.warn("Progress update failed:", err));
 
   // ========================================================================
-  // STEP 2: Identify unique contacts that need to be pushed
-  // Only push contacts that own at least one property being pushed
+  // STEP 3: Identify unique contacts that need to be pushed
   // ========================================================================
   const contactsToPush = new Map<number, (typeof properties)[0]["owner"]>();
 
@@ -112,20 +181,21 @@ export async function pushLeadsForUser(job: Job) {
 
   console.info(`👥 Found ${contactsToPush.size} unique contacts to push`);
 
-  // ← CHANGE 6: Simplified tracking (no multi-account)
   const contactIdMap: Record<number, string> = {};
   let pushedContactCount = 0;
   let pushedPropertyCount = 0;
   let associationCount = 0;
 
-  // ← CHANGE 7: REMOVED multi-account loop (was: for (const account of GHL_ACCOUNTS))
-  // Now processes once with user's own credentials
-
   // ========================================================================
-  // STEP 3: Push contacts first
-  // We need their GHL IDs to create associations later
+  // STEP 4: Push contacts first
   // ========================================================================
   for (const [contactId, contact] of contactsToPush) {
+    // ✅ Fixed: Null check for contact
+    if (!contact) {
+      console.warn(`⚠️ Skipping contact ID ${contactId} - contact is null`);
+      continue;
+    }
+
     if (!contact.email && !contact.phone) {
       console.warn(
         `⚠️ Skipping contact ID ${contactId} - no email or phone number`
@@ -134,7 +204,6 @@ export async function pushLeadsForUser(job: Job) {
     }
 
     // First try to find existing contact (rate-limited)
-    // ← CHANGE 8: Using accessToken and locationId instead of account.privateToken/locationId
     const existingGhlId = await rateLimitedRequest(() =>
       findGhlContactByEmailOrPhone(
         contact.email,
@@ -180,7 +249,7 @@ export async function pushLeadsForUser(job: Job) {
     const tagsArray = buildTags(property.tags, null);
 
     const contactPayload: Record<string, unknown> = {
-      locationId: locationId, // ← CHANGE 9: Using user's locationId
+      locationId: locationId,
       firstName: contact.firstName ?? undefined,
       lastName: contact.lastName ?? undefined,
       email: contact.email ?? undefined,
@@ -425,7 +494,6 @@ export async function pushLeadsForUser(job: Job) {
 
     try {
       // RATE-LIMITED REQUEST
-      // ← CHANGE 10: Using OAuth accessToken instead of account.privateToken
       const resp = await rateLimitedRequest(() =>
         axios.post(`${GHL_BASE_URL}/contacts/`, contactPayload, {
           headers: {
@@ -440,7 +508,6 @@ export async function pushLeadsForUser(job: Job) {
       if (resp.status === 201 || resp.status === 200) {
         const ghlContactId = resp.data.contact?.id || resp.data.id;
 
-        // ← CHANGE 11: Simplified - always update (no multi-account check)
         await prisma.contact.update({
           where: { id: contact.id },
           data: { pushed: true, ghlContactId },
@@ -491,17 +558,27 @@ export async function pushLeadsForUser(job: Job) {
   );
 
   // ========================================================================
-  // STEP 4: Push properties and create associations
-  // Only push properties whose owners were successfully pushed
+  // STEP 5: Push properties and create associations
   // ========================================================================
   for (const p of properties) {
-    // ← CHANGE 12: Using accessToken and locationId
     const existingGhlId = await rateLimitedRequest(() =>
       findGhlPropertyByAddress(p.addressFull, accessToken, locationId)
     );
 
     if (existingGhlId) {
       console.info(`Found existing property in GHL: ${existingGhlId}`);
+
+      // Mark as pushed with timestamp if not already marked
+      if (!p.pushed) {
+        await prisma.property.update({
+          where: { id: p.id },
+          data: {
+            pushed: true,
+            pushedAt: new Date(),
+            ghlPropertyId: existingGhlId,
+          },
+        });
+      }
 
       let ghlContactId: string | undefined = contactIdMap[p.ownerId!];
 
@@ -512,7 +589,6 @@ export async function pushLeadsForUser(job: Job) {
         });
 
         if (owner) {
-          // ← CHANGE 13: Using accessToken and locationId
           ghlContactId = await rateLimitedRequest(() =>
             findGhlContactByEmailOrPhone(
               owner.email,
@@ -528,7 +604,6 @@ export async function pushLeadsForUser(job: Job) {
         console.info(
           `🔗 Associating existing property ${p.id} (GHL: ${existingGhlId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`
         );
-        // ← CHANGE 14: Using accessToken and locationId
         await rateLimitedRequest(() =>
           ensureContactPropertyAssociation(
             ghlContactId,
@@ -558,7 +633,6 @@ export async function pushLeadsForUser(job: Job) {
       });
 
       if (owner) {
-        // ← CHANGE 15: Using accessToken and locationId
         ghlContactId = await rateLimitedRequest(() =>
           findGhlContactByEmailOrPhone(
             owner.email,
@@ -646,7 +720,7 @@ export async function pushLeadsForUser(job: Job) {
         address: p.addressFull,
         ...customFields,
       },
-      locationId: locationId, // ← CHANGE 16: Using user's locationId
+      locationId: locationId,
     };
 
     console.debug(
@@ -656,7 +730,6 @@ export async function pushLeadsForUser(job: Job) {
 
     try {
       // RATE-LIMITED REQUEST
-      // ← CHANGE 17: Using OAuth accessToken instead of account.privateToken
       const resp = await rateLimitedRequest(() =>
         axios.post(
           `${GHL_BASE_URL}/objects/${CUSTOM_OBJECT_KEY}/records`,
@@ -675,12 +748,12 @@ export async function pushLeadsForUser(job: Job) {
       if (resp.status === 201 || resp.status === 200) {
         const ghlPropertyId = extractGhlId(resp.data);
 
-        // ← CHANGE 18: Simplified - always mark as pushed (no multi-account check)
         if (ghlPropertyId) {
           await prisma.property.update({
             where: { id: p.id },
             data: {
               pushed: true,
+              pushedAt: new Date(), // ✅ Track when pushed
               ghlPropertyId,
             },
           });
@@ -707,7 +780,6 @@ export async function pushLeadsForUser(job: Job) {
           console.info(
             `🔗 Associating property ${p.id} (GHL: ${ghlPropertyId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`
           );
-          // ← CHANGE 19: Using accessToken and locationId
           await rateLimitedRequest(() =>
             ensureContactPropertyAssociation(
               ghlContactId,
@@ -748,7 +820,6 @@ export async function pushLeadsForUser(job: Job) {
     }
   }
 
-  // ← CHANGE 20: Simplified final summary (no multi-account breakdown)
   console.info(`
 ========================================
 ✅ Job ${job.id} COMPLETE
@@ -758,6 +829,11 @@ export async function pushLeadsForUser(job: Job) {
 🔗 Associations created: ${associationCount}
 🔑 OAuth token used for: ${user.email || user.id}
 📍 Location ID: ${locationId}
+🎯 Mode: ${
+    isPreIdentified
+      ? "Daily Queue (Pre-identified)"
+      : "Webhook (Query with limit)"
+  }
 ========================================
   `);
 }

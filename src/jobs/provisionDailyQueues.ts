@@ -1,5 +1,5 @@
 // src/jobs/provisionDailyQueues.ts
-import { PrismaClient, Prisma } from "@prisma/client";
+import { PrismaClient, Prisma, UserSettings } from "@prisma/client";
 import {
   getQueueInstance,
   JOB_TYPES,
@@ -33,6 +33,48 @@ interface ProvisionResult {
   propertiesProcessed: number;
   error?: string;
   timestamp: string;
+}
+
+/**
+ * Helper: Convert YYYYMMDD string to DateTime
+ */
+function dateTimeFromYYYYMMDD(date: string): DateTime {
+  const year = date.slice(0, 4);
+  const month = date.slice(4, 6);
+  const day = date.slice(6, 8);
+  return DateTime.fromISO(`${year}-${month}-${day}`, {
+    zone: getRegionTimezone(),
+  });
+}
+
+/**
+ * Check if properties were pushed earlier today
+ * This prevents counting properties from previous days
+ */
+async function getPropertiesPushedToday(
+  userId: string,
+  settings: UserSettings,
+  date: string
+): Promise<number> {
+  const startOfDay = dateTimeFromYYYYMMDD(date).startOf("day").toJSDate();
+  const endOfDay = dateTimeFromYYYYMMDD(date).endOf("day").toJSDate();
+
+  const count = await prisma.property.count({
+    where: {
+      price: {
+        gte: settings.priceMin ?? 0,
+        lte: settings.priceMax ?? Number.MAX_SAFE_INTEGER,
+      },
+      postalCode: { in: settings.zipCodes },
+      pushed: true,
+      pushedAt: {
+        gte: startOfDay,
+        lte: endOfDay,
+      },
+    },
+  });
+
+  return count;
 }
 
 /**
@@ -104,6 +146,29 @@ export async function provisionDailyQueues(
 
       console.log(`\n👤 Processing user: ${user.email || user.id}`);
 
+      // ✅ NEW: Check how many properties already pushed today
+      const alreadyPushedCount = await getPropertiesPushedToday(
+        user.id,
+        user.settings,
+        date
+      );
+
+      const remainingLimit = Math.max(
+        0,
+        user.settings.planLimit - alreadyPushedCount
+      );
+
+      if (remainingLimit === 0) {
+        console.log(
+          `   ⚠️ Plan limit reached (${user.settings.planLimit}), skipping`
+        );
+        continue;
+      }
+
+      console.log(
+        `   📊 Plan limit: ${user.settings.planLimit}, Already pushed: ${alreadyPushedCount}, Remaining: ${remainingLimit}`
+      );
+
       // Fetch properties that match user's criteria and haven't been pushed
       const properties = await prisma.property.findMany({
         where: {
@@ -117,10 +182,15 @@ export async function provisionDailyQueues(
         include: {
           owner: true,
         },
-        take: user.settings.planLimit, // Respect user's plan limit
+        take: remainingLimit, // ✅ Use remaining limit, not full plan limit
+        orderBy: {
+          createdAt: "asc", // ✅ FIFO ordering - oldest properties first
+        },
       });
 
-      console.log(`   📊 Found ${properties.length} matching properties`);
+      console.log(
+        `   📊 Found ${properties.length} matching properties (limit: ${remainingLimit})`
+      );
 
       if (properties.length === 0) {
         console.log(`   ℹ️ No properties to process, skipping`);

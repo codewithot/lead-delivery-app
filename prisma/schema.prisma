@@ -181,6 +181,7 @@ model Property {
   data                   String?  @map("Data")
   ingestedAt             DateTime @default(now())
   pushed                 Boolean  @default(false)
+  pushedAt               DateTime?
   createdAt              DateTime @default(now())
 
   @@unique([ownerId, addressFull], name: "owner_address_unique")

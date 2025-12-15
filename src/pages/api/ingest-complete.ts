@@ -27,7 +27,7 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  console.log("🔗 Webhook received");
+  console.log("📥 Webhook received");
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -110,6 +110,40 @@ export default async function handler(
         continue;
       }
 
+      // ✅ NEW: Calculate remaining limit by checking already pushed today
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const alreadyPushed = await prisma.property.count({
+        where: {
+          pushed: true,
+          price: {
+            gte: user.settings.priceMin ?? 0,
+            lte: user.settings.priceMax ?? Number.MAX_SAFE_INTEGER,
+          },
+          postalCode: { in: user.settings.zipCodes },
+          pushedAt: {
+            gte: todayStart, // ✅ Use pushedAt field we just added
+          },
+        },
+      });
+
+      const remainingLimit = Math.max(
+        0,
+        user.settings.planLimit - alreadyPushed
+      );
+
+      if (remainingLimit === 0) {
+        console.log(
+          `ℹ️  User ${user.id} has reached plan limit (${user.settings.planLimit})`
+        );
+        continue;
+      }
+
+      console.log(
+        `👤 User ${user.id}: Plan limit ${user.settings.planLimit}, Already pushed: ${alreadyPushed}, Remaining: ${remainingLimit}`
+      );
+
       // Count properties that need to be pushed
       const propertyCount = await prisma.property.count({
         where: {
@@ -122,18 +156,21 @@ export default async function handler(
         },
       });
 
-      if (propertyCount === 0) {
+      // ✅ Apply remaining limit
+      const effectiveCount = Math.min(propertyCount, remainingLimit);
+
+      if (effectiveCount === 0) {
         console.log(`ℹ️  User ${user.id} has no properties to push`);
         continue;
       }
 
-      totalPropertiesFound += propertyCount;
+      totalPropertiesFound += effectiveCount;
 
-      // Calculate number of batches
-      const batchCount = Math.ceil(propertyCount / PROPERTIES_PER_BATCH);
+      // Calculate number of batches based on effective count
+      const batchCount = Math.ceil(effectiveCount / PROPERTIES_PER_BATCH);
 
       console.log(
-        `👤 User ${user.id}: ${propertyCount} properties → ${batchCount} batches`
+        `👤 User ${user.id}: ${effectiveCount} properties (limit: ${remainingLimit}) → ${batchCount} batches`
       );
 
       // Create one job per batch
@@ -163,7 +200,6 @@ export default async function handler(
           continue;
         }
 
-        // Create in database for tracking
         // Create in database for tracking
         await prisma.job.create({
           data: {
