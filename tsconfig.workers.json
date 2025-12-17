@@ -19,7 +19,12 @@
     "src/workers/**/*",
     "src/jobs/**/*",
     "src/schedulers/**/*",
-    "src/lib/**/*"
+    "src/lib/**/*",
+    "src/types/**/*"
   ],
-  "exclude": ["node_modules", ".next", "out"]
+  "exclude": [
+    "node_modules",
+    ".next",
+    "out"
+  ]
 }

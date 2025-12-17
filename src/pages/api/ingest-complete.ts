@@ -9,6 +9,7 @@ import {
 } from "@/lib/queue";
 import { spawn } from "child_process";
 import path from "path";
+import { withRateLimit } from "@/lib/apiRateLimiter";
 
 const prisma = new PrismaClient();
 
@@ -23,7 +24,7 @@ const PROPERTIES_PER_BATCH = parseInt(
   10
 );
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
@@ -215,8 +216,7 @@ export default async function handler(
 
         totalJobsCreated++;
         console.log(
-          `✅ Created batch job ${batchIndex + 1}/${batchCount} for user ${
-            user.id
+          `✅ Created batch job ${batchIndex + 1}/${batchCount} for user ${user.id
           }`
         );
       }
@@ -282,3 +282,8 @@ export default async function handler(
     });
   }
 }
+
+// ✅ Wrap with rate limiting - WEBHOOK tier: 10 requests/minute
+export default withRateLimit(handler, {
+  tier: 'WEBHOOK',
+});

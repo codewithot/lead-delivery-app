@@ -14,9 +14,13 @@ export default async function handler(
     return res.status(400).json({ error: "zip and radius required" });
   }
 
+  if (!/^\d{5}$/.test(zip)) {
+    return res.status(400).json({ error: "Invalid ZIP code format" });
+  }
+
   const miles = Number(radius);
-  if (isNaN(miles) || miles <= 0) {
-    return res.status(400).json({ error: "radius must be a positive number" });
+  if (isNaN(miles) || miles <= 0 || miles > 500) {
+    return res.status(400).json({ error: "Radius must be 1-500" });
   }
 
   // 1️⃣ Look up center ZIP in DB

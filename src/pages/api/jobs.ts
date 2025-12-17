@@ -4,10 +4,11 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import { PrismaClient } from "@prisma/client";
 import { getJobProgress } from "@/lib/jobProgress";
+import { withRateLimit } from "@/lib/apiRateLimiter";
 
 const prisma = new PrismaClient();
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
@@ -56,3 +57,16 @@ export default async function handler(
     return res.status(500).json({ message: "Internal server error" });
   }
 }
+
+// ✅ Wrap with rate limiting - READ tier: 100 requests/minute
+export default withRateLimit(handler, {
+  tier: 'READ',
+  getUserId: async (req) => {
+    try {
+      const session = await getServerSession(req, {} as NextApiResponse, authOptions);
+      return session?.user?.userId;
+    } catch {
+      return undefined;
+    }
+  },
+});

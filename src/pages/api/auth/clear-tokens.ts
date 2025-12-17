@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from "next";
+import { withRateLimit } from "@/lib/apiRateLimiter";
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
@@ -16,3 +17,8 @@ export default async function handler(
 
   return res.status(200).json({ message: "Tokens cleared" });
 }
+
+// ✅ Wrap with rate limiting - AUTH tier: 5 requests per 5 minutes
+export default withRateLimit(handler, {
+  tier: 'AUTH',
+});

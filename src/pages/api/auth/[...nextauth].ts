@@ -2,42 +2,14 @@
 import NextAuth, {
   NextAuthOptions,
   Profile,
-  Session,
-  User,
   Account,
 } from "next-auth";
-import { JWT } from "next-auth/jwt";
+import CredentialsProvider from "next-auth/providers/credentials";
+import bcrypt from "bcryptjs";
+
 import { PrismaClient } from "@prisma/client";
 import { TokenSet } from "next-auth/core/types";
-
-// --- Module Augmentations -------------------------------------------------
-declare module "next-auth" {
-  interface Session {
-    user: {
-      name?: string | null;
-      email?: string | null;
-      image?: string | null;
-      userId?: string;
-    };
-  }
-
-  interface Profile {
-    id: string;
-  }
-}
-
-declare module "next-auth/jwt" {
-  interface JWT {
-    accessToken?: string;
-    refreshToken?: string;
-    expiresAt?: number;
-    locationId?: string;
-    companyId?: string;
-    userId?: string;
-    email?: string;
-    error?: string;
-  }
-}
+import { PrismaAdapter } from "@next-auth/prisma-adapter";
 
 // --- Type Definitions ------------------------------------------------------
 interface GHLTokenResponse extends TokenSet {
@@ -72,6 +44,7 @@ const prisma = new PrismaClient();
 const TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token";
 
 export const authOptions: NextAuthOptions = {
+  adapter: PrismaAdapter(prisma), // Add PrismaAdapter
   providers: [
     {
       id: "gh",
@@ -195,79 +168,85 @@ export const authOptions: NextAuthOptions = {
           companyId: extendedProfile.companyId ?? ghlTokens.companyId,
         };
       },
+      allowDangerousEmailAccountLinking: true,
     },
-  ],
-  callbacks: {
-    async jwt({
-      token,
-      account,
-      user,
-    }: {
-      token: JWT;
-      account: Account | null;
-      user?: User;
-    }) {
-      if (account && user) {
-        // ← CHANGE 2: Cast account to access locationId and companyId
-        const extendedAccount = account as ExtendedAccount;
+    // Credentials Provider for Email/Password Login
+    CredentialsProvider({
+      name: "Credentials",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.password) {
+          throw new Error("Invalid credentials");
+        }
 
-        console.log("[jwt] account:", account);
-        console.log("[jwt] user:", user);
-        console.log("[jwt] ▶ about to upsert user:", {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          locationId: extendedAccount.locationId, // ← CHANGE 3: Log locationId
-          companyId: extendedAccount.companyId, // ← CHANGE 4: Log companyId
+        const user = await prisma.user.findUnique({
+          where: { email: credentials.email },
         });
 
+        if (!user || !user.password) {
+          throw new Error("User not found or password not set");
+        }
+
+        const isValid = await bcrypt.compare(credentials.password, user.password);
+
+        if (!isValid) {
+          throw new Error("Invalid password");
+        }
+
+        return user;
+      },
+    }),
+  ],
+  callbacks: {
+    async jwt({ token, account, user }) {
+      console.log("[jwt] Callback triggered", { hasAccount: !!account, hasUser: !!user });
+      if (account && user) {
+        // ... (existing logic)
+        // Cast account to access extended fields
+        const extendedAccount = account as ExtendedAccount;
+
+        console.log("[jwt] Updating user tokens for:", user.id);
+
+        // Store tokens in database using update (user created via adapter)
         try {
-          const upserted = await prisma.user.upsert({
+          // Note: The adapter handles user creation, but we update tokens here
+          await prisma.user.update({
             where: { id: user.id },
-            create: {
-              id: user.id,
-              name: user.name!,
-              email: user.email!,
+            data: {
               accessToken: account.access_token,
               refreshToken: account.refresh_token,
               tokenExpiresAt: account.expires_at
                 ? new Date(account.expires_at * 1000)
                 : undefined,
-              locationId: extendedAccount.locationId, // ← CHANGE 5: Save locationId
-              companyId: extendedAccount.companyId, // ← CHANGE 6: Save companyId
-            },
-            update: {
-              name: user.name!,
-              email: user.email!,
-              accessToken: account.access_token,
-              refreshToken: account.refresh_token,
-              tokenExpiresAt: account.expires_at
-                ? new Date(account.expires_at * 1000)
-                : undefined,
-              locationId: extendedAccount.locationId, // ← CHANGE 7: Update locationId
-              companyId: extendedAccount.companyId, // ← CHANGE 8: Update companyId
+              locationId: extendedAccount.locationId,
+              companyId: extendedAccount.companyId,
             },
           });
-          console.log("[jwt] ✅ upserted user:", upserted);
+          console.log("[jwt] User tokens updated successfully");
         } catch (e) {
-          const errorMessage = e instanceof Error ? e.message : String(e);
-          console.error("[jwt] ❌ upsert error:", errorMessage);
+          console.error("[jwt] Token update error:", e);
         }
+
         token.sub = user.id;
         token.userId = user.id;
         token.email = user.email ?? undefined;
+        token.role = user.role || 'USER'; // Add role to token
+        token.locationId = extendedAccount.locationId;
+        token.companyId = extendedAccount.companyId;
       }
       return token;
     },
 
-    async session({ session, token }: { session: Session; token: JWT }) {
-      console.log("[session] JWT token:", token);
-      session.user = {
-        ...session.user,
-        userId: token.sub,
-        email: token.email ?? null,
-      };
-      console.log("[session] Session object:", session);
+    async session({ session, token }) {
+      console.log("[session] Callback triggered. Token userId:", token.userId);
+      if (session.user) {
+        session.user.userId = token.userId;
+        session.user.email = token.email ?? null;
+        session.user.role = token.role; // Add role to session
+      }
       return session;
     },
 

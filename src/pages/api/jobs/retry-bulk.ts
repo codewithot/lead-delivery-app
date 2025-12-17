@@ -2,12 +2,14 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, Prisma } from "@prisma/client";
 import { getQueueInstance } from "@/lib/queue";
+import { isAdmin } from "@/lib/adminGuard";
+import { withRateLimit } from "@/lib/apiRateLimiter";
 
 const prisma = new PrismaClient();
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
@@ -36,11 +38,17 @@ export default async function handler(
     }
 
     // Fetch all jobs
+    const whereCondition: Prisma.JobWhereInput = {
+      id: { in: jobIds },
+    };
+
+    // Only restrict to userId if not admin
+    if (!isAdmin(session)) {
+      whereCondition.userId = session.user.userId;
+    }
+
     const jobs = await prisma.job.findMany({
-      where: {
-        id: { in: jobIds },
-        userId: session.user.userId, // Ensure user owns these jobs
-      },
+      where: whereCondition,
     });
 
     if (jobs.length === 0) {
@@ -120,3 +128,15 @@ export default async function handler(
     });
   }
 }
+
+export default withRateLimit(handler, {
+  tier: "WRITE",
+  getUserId: async (req) => {
+    try {
+      const session = await getServerSession(req, {} as NextApiResponse, authOptions);
+      return session?.user?.userId;
+    } catch {
+      return undefined;
+    }
+  },
+});

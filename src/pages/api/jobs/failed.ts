@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { PrismaClient, Prisma } from "@prisma/client";
+import { isAdmin } from "@/lib/adminGuard";
 
 const prisma = new PrismaClient();
 
@@ -32,11 +33,11 @@ export default async function handler(
       status: "failed",
     };
 
-    // If specific userId requested (admin feature)
-    if (userId) {
-      whereClause.userId = userId as string;
+    // If specific userId requested, verify admin access
+    if (userId && typeof userId === 'string' && isAdmin(session)) {
+      whereClause.userId = userId;
     } else {
-      // Regular users only see their own failed jobs
+      // Regular users (or non-admin requests) only see their own failed jobs
       whereClause.userId = session.user.userId;
     }
 

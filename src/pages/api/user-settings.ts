@@ -2,13 +2,21 @@ import { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import { PrismaClient } from "@prisma/client";
+import { getCsrfToken } from "next-auth/react";
+import { withRateLimit } from "@/lib/apiRateLimiter";
 
 const prisma = new PrismaClient();
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+  const csrfToken = req.headers["x-csrf-token"];
+  const validToken = await getCsrfToken({ req });
+  if (csrfToken !== validToken) {
+    console.log("Invalid CSRF token");
+    return res.status(403).json({ error: "Invalid CSRF token" });
+  }
   console.log("API called:", req.method, req.url);
 
   // Check request method early
@@ -101,3 +109,16 @@ export default async function handler(
     return res.status(500).json({ error: "Something went wrong" });
   }
 }
+
+// ✅ Wrap with rate limiting - WRITE tier: 30 requests/minute
+export default withRateLimit(handler, {
+  tier: 'WRITE',
+  getUserId: async (req) => {
+    try {
+      const session = await getServerSession(req, {} as NextApiResponse, authOptions);
+      return session?.user?.userId;
+    } catch {
+      return undefined;
+    }
+  },
+});

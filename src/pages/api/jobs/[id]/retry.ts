@@ -4,10 +4,12 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
 import { PrismaClient } from "@prisma/client";
 import { getQueueInstance } from "@/lib/queue";
+import { withRateLimit } from "@/lib/apiRateLimiter";
+import { isAdmin } from "@/lib/adminGuard";
 
 const prisma = new PrismaClient();
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
@@ -37,8 +39,8 @@ export default async function handler(
       return res.status(404).json({ error: "Job not found" });
     }
 
-    // Check ownership
-    if (job.userId !== session.user.userId) {
+    // Check ownership (bypass if admin)
+    if (job.userId !== session.user.userId && !isAdmin(session)) {
       return res.status(403).json({ error: "Forbidden - not your job" });
     }
 
@@ -91,3 +93,16 @@ export default async function handler(
     });
   }
 }
+
+// ✅ Wrap with rate limiting - WRITE tier: 30 requests/minute
+export default withRateLimit(handler, {
+  tier: 'WRITE',
+  getUserId: async (req) => {
+    try {
+      const session = await getServerSession(req, {} as NextApiResponse, authOptions);
+      return session?.user?.userId;
+    } catch {
+      return undefined;
+    }
+  },
+});

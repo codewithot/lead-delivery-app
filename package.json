@@ -25,12 +25,14 @@
     "form-data": "^4.0.4",
     "haversine-distance": "^1.2.4",
     "i18n-iso-countries": "^7.14.0",
+    "ioredis": "^5.8.2",
     "luxon": "^3.7.2",
     "next": "^15.3.4",
     "next-auth": "^4.24.11",
     "node-cron": "^4.2.1",
     "pg-boss": "^12.1.1",
     "prisma": "^6.11.0",
+    "rate-limiter-flexible": "^9.0.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "swr": "^2.3.4",
@@ -40,6 +42,7 @@
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
     "@types/csv-parse": "^1.1.12",
+    "@types/ioredis": "^4.28.10",
     "@types/node": "^20.19.7",
     "@types/node-cron": "^3.0.11",
     "@types/react": "^19",
@@ -50,5 +53,8 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.2"
+  },
+  "optionalDependencies": {
+    "ioredis": "^5.4.1"
   }
 }

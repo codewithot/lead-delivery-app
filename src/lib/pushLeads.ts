@@ -31,6 +31,12 @@ import {
   normalizePostalCode,
 } from "./helper";
 import { updateJobProgress } from "./jobProgress";
+import {
+  normalizeEmail,
+  normalizePhone,
+  normalizeAddress,
+} from "./normalizers";
+import { Prisma } from "@prisma/client";
 
 const prisma = new PrismaClient();
 const GHL_BASE_URL = "https://services.leadconnectorhq.com";
@@ -55,6 +61,71 @@ interface PushLeadsPayload {
   totalBatches?: number;
 }
 
+/**
+ * Check if contact already exists in local database
+ * Uses normalized email and phone for matching
+ */
+async function findLocalContact(
+  email: string | null | undefined,
+  phone: string | null | undefined
+): Promise<Contact | null> {
+  if (!email && !phone) {
+    return null;
+  }
+
+  const emailNorm = normalizeEmail(email);
+  const phoneNorm = normalizePhone(phone);
+  const orConditions: Prisma.ContactWhereInput[] = [];
+  
+  // ✅ Use normalized fields for exact matching
+  if (emailNorm.normalized && emailNorm.isValid) {
+    orConditions.push({
+      emailNormalized: emailNorm.normalized,
+    });
+  }
+
+  if (phoneNorm.normalized && phoneNorm.isValid) {
+    orConditions.push({
+      phoneNormalized: phoneNorm.normalized,
+    });
+  }
+
+  if (orConditions.length === 0) {
+    return null;
+  }
+
+  const contact = await prisma.contact.findFirst({
+    where: { OR: orConditions },
+  });
+
+  return contact;
+}
+/**
+ * Check if property already exists in local database
+ * Uses normalized address for matching
+ */
+async function findLocalProperty(
+  address: string | null | undefined
+): Promise<Property | null> {
+  if (!address) {
+    return null;
+  }
+
+  const addressNorm = normalizeAddress(address);
+
+  if (!addressNorm.normalized || !addressNorm.isValid) {
+    return null;
+  }
+
+  // ✅ Use normalized field for exact matching
+  const property = await prisma.property.findFirst({
+    where: {
+      addressNormalized: addressNorm.normalized,
+    },
+  });
+
+  return property;
+}
 export async function pushLeadsForUser(job: Job) {
   console.info(`▶ Starting job id=${job.id}, userId=${job.userId}`);
   console.debug(`Payload: ${JSON.stringify(job.payload)}`);
@@ -203,7 +274,18 @@ export async function pushLeadsForUser(job: Job) {
       continue;
     }
 
-    // First try to find existing contact (rate-limited)
+    // ✅ NEW: Check local database first
+    const localContact = await findLocalContact(contact.email, contact.phone);
+
+    if (localContact?.ghlContactId) {
+      console.info(
+        `✅ Found existing contact in local DB: ${localContact.ghlContactId} for contact ID ${contactId}`
+      );
+      contactIdMap[contactId] = localContact.ghlContactId;
+      continue; // Skip GHL API call
+    }
+
+    // Then try to find existing contact in GHL (rate-limited)
     const existingGhlId = await rateLimitedRequest(() =>
       findGhlContactByEmailOrPhone(
         contact.email,
@@ -255,7 +337,7 @@ export async function pushLeadsForUser(job: Job) {
       email: contact.email ?? undefined,
       phone: contact.phone ?? undefined,
       address1: property.streetAddress ?? undefined,
-      tags: tagsArray ?? undefined,
+      tags: (tagsArray?.length ?? 0) > 0 ? tagsArray : undefined,
       city: property.city ?? undefined,
       country: normalizeCountry(property.country) ?? undefined,
       state: property.state ?? undefined,
@@ -561,6 +643,67 @@ export async function pushLeadsForUser(job: Job) {
   // STEP 5: Push properties and create associations
   // ========================================================================
   for (const p of properties) {
+    // ✅ NEW: Check local database first
+    const localProperty = await findLocalProperty(p.addressFull);
+
+    if (localProperty?.ghlPropertyId) {
+      console.info(
+        `✅ Found existing property in local DB: ${localProperty.ghlPropertyId}`
+      );
+
+      // Mark as pushed if not already
+      if (!p.pushed) {
+        await prisma.property.update({
+          where: { id: p.id },
+          data: {
+            pushed: true,
+            pushedAt: new Date(),
+            ghlPropertyId: localProperty.ghlPropertyId,
+          },
+        });
+      }
+
+      // Still need to create association
+      let ghlContactId: string | undefined = contactIdMap[p.ownerId!];
+
+      if (!ghlContactId && p.ownerId) {
+        const owner = await prisma.contact.findUnique({
+          where: { id: p.ownerId },
+          select: { email: true, phone: true, ghlContactId: true },
+        });
+
+        if (owner?.ghlContactId) {
+          ghlContactId = owner.ghlContactId;
+        } else if (owner) {
+          ghlContactId = await rateLimitedRequest(() =>
+            findGhlContactByEmailOrPhone(
+              owner.email,
+              owner.phone,
+              accessToken,
+              locationId
+            )
+          );
+        }
+      }
+
+      if (ghlContactId && localProperty.ghlPropertyId) {
+        console.info(
+          `🔗 Associating existing property ${p.id} with contact ${p.ownerId}`
+        );
+        await rateLimitedRequest(() =>
+          ensureContactPropertyAssociation(
+            ghlContactId,
+            localProperty.ghlPropertyId!,
+            accessToken,
+            locationId
+          )
+        );
+        associationCount++;
+      }
+
+      continue; // Skip GHL property creation
+    }
+
     const existingGhlId = await rateLimitedRequest(() =>
       findGhlPropertyByAddress(p.addressFull, accessToken, locationId)
     );
