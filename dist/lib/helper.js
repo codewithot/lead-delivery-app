@@ -5,6 +5,8 @@ const API_VERSION = "2021-07-28";
 const prisma = new PrismaClient();
 const CUSTOM_OBJECT_KEY = "custom_objects.properties";
 import { normalizeEmail, normalizePhone, normalizeAddress, normalizeAddressForFuzzyMatch, } from "./normalizers";
+import { createLogger } from "@/lib/secureLogger";
+const logger = createLogger('PushLeads');
 let countriesLib = null;
 try {
     // optional, best-effort: use i18n-iso-countries if installed
@@ -517,15 +519,13 @@ export async function ensureContactPropertyAssociation(contactGhlId, propertyGhl
     try {
         const res = await createRelationBetweenRecords(assocId, contactGhlId, propertyGhlId, privateToken, locationId);
         if (res?.success) {
-            console.info("🔗 Associated contact <> property", {
-                contactName,
-                contactGhlId,
-                propertyGhlId,
+            logger.info("Associated contact with property", {
+                contactId: contactGhlId,
+                propertyId: propertyGhlId,
             });
         }
         else {
             console.error("❌ Could not create relation:", res?.error ?? res, {
-                contactName,
                 contactGhlId,
                 propertyGhlId,
             });
@@ -829,7 +829,10 @@ export const parkingMapping = {
     "Inside Entrance, Attached,": "Other",
 };
 export async function findGhlContactByEmailOrPhone(email, phone, privateToken, locationId) {
-    console.info(`🔍 Searching for existing contact - Email: ${email || "N/A"}, Phone: ${phone || "N/A"}`);
+    logger.info("Searching for existing contact", {
+        hasEmail: !!email,
+        hasPhone: !!phone,
+    });
     if (!email && !phone) {
         console.warn(`⚠️ No email or phone provided for contact search`);
         return undefined;
@@ -847,7 +850,12 @@ export async function findGhlContactByEmailOrPhone(email, phone, privateToken, l
     // Use normalized values for search
     const normalizedEmail = emailNormResult.normalized;
     const normalizedPhone = phoneNormResult.normalized;
-    console.debug(`🔍 Searching with normalized values - Email: ${normalizedEmail || "N/A"}, Phone: ${normalizedPhone || "N/A"}`);
+    logger.debug("Using normalized search values", {
+        emailNormalized: !!normalizedEmail,
+        emailValid: emailNormResult.isValid,
+        phoneNormalized: !!normalizedPhone,
+        phoneValid: phoneNormResult.isValid,
+    });
     try {
         const headers = {
             Authorization: `Bearer ${privateToken}`,
@@ -856,7 +864,7 @@ export async function findGhlContactByEmailOrPhone(email, phone, privateToken, l
         };
         // 1️⃣ Try searching by normalized email first (if available and valid)
         if (normalizedEmail && emailNormResult.isValid) {
-            console.debug(`📧 Searching GHL by normalized email: ${normalizedEmail}`);
+            logger.debug("Searching GHL by email");
             try {
                 const resp = await axios.get(`${GHL_BASE_URL}/contacts/search/duplicate`, {
                     headers,
@@ -867,7 +875,7 @@ export async function findGhlContactByEmailOrPhone(email, phone, privateToken, l
                 });
                 const contact = resp.data?.contact || resp.data;
                 if (contact?.id) {
-                    console.info(`✅ Found contact by email: ${contact.id}`);
+                    logger.info("Found existing contact", { contactId: contact.id });
                     return contact.id;
                 }
             }
@@ -903,7 +911,7 @@ export async function findGhlContactByEmailOrPhone(email, phone, privateToken, l
                     });
                     const contact = resp.data?.contact || resp.data;
                     if (contact?.id) {
-                        console.info(`✅ Found contact by original email: ${contact.id}`);
+                        logger.info("Found existing contact", { contactId: contact.id });
                         return contact.id;
                     }
                 }
@@ -914,7 +922,7 @@ export async function findGhlContactByEmailOrPhone(email, phone, privateToken, l
         }
         // 2️⃣ Try searching by normalized phone (if email search failed and phone is valid)
         if (normalizedPhone && phoneNormResult.isValid) {
-            console.debug(`📱 Searching GHL by normalized phone: ${normalizedPhone}`);
+            logger.debug("Searching GHL by phone");
             try {
                 const resp = await axios.get(`${GHL_BASE_URL}/contacts/search/duplicate`, {
                     headers,
@@ -925,7 +933,7 @@ export async function findGhlContactByEmailOrPhone(email, phone, privateToken, l
                 });
                 const contact = resp.data?.contact || resp.data;
                 if (contact?.id) {
-                    console.info(`✅ Found contact by phone: ${contact.id}`);
+                    logger.info("Found existing contact", { contactId: contact.id });
                     return contact.id;
                 }
             }
@@ -961,7 +969,7 @@ export async function findGhlContactByEmailOrPhone(email, phone, privateToken, l
                     });
                     const contact = resp.data?.contact || resp.data;
                     if (contact?.id) {
-                        console.info(`✅ Found contact by original phone: ${contact.id}`);
+                        logger.info("Found existing contact", { contactId: contact.id });
                         return contact.id;
                     }
                 }
@@ -1008,9 +1016,11 @@ export async function findGhlPropertyByAddress(address, privateToken, locationId
         // Fall back to original address
     }
     const searchAddress = normalizedAddress || address;
-    console.info(`🏠 Searching for existing property: ${searchAddress}`);
-    console.debug(`🔍 Original address: ${address}`);
-    console.debug(`🔍 Normalized address: ${normalizedAddress}`);
+    logger.info("Searching for existing property", {
+        hasAddress: !!searchAddress,
+        addressLength: searchAddress?.length || 0,
+        wasNormalized: normalizedAddress !== address,
+    });
     try {
         const headers = {
             Authorization: `Bearer ${privateToken}`,

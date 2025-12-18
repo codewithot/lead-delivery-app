@@ -37,7 +37,9 @@ import {
   normalizeAddress,
 } from "./normalizers";
 import { Prisma } from "@prisma/client";
+import { createLogger } from "@/lib/secureLogger";
 
+const logger = createLogger('PushLeads');
 const prisma = new PrismaClient();
 const GHL_BASE_URL = "https://services.leadconnectorhq.com";
 const CUSTOM_OBJECT_KEY = "custom_objects.properties";
@@ -76,7 +78,7 @@ async function findLocalContact(
   const emailNorm = normalizeEmail(email);
   const phoneNorm = normalizePhone(phone);
   const orConditions: Prisma.ContactWhereInput[] = [];
-  
+
   // ✅ Use normalized fields for exact matching
   if (emailNorm.normalized && emailNorm.isValid) {
     orConditions.push({
@@ -127,7 +129,7 @@ async function findLocalProperty(
   return property;
 }
 export async function pushLeadsForUser(job: Job) {
-  console.info(`▶ Starting job id=${job.id}, userId=${job.userId}`);
+  logger.info(`▶ Starting job id=${job.id}, userId=${job.userId}`);
   console.debug(`Payload: ${JSON.stringify(job.payload)}`);
 
   // ========================================================================
@@ -150,8 +152,8 @@ export async function pushLeadsForUser(job: Job) {
   const locationId = user.locationId;
   const settings = user.settings as UserSettings;
 
-  console.info(`🔑 Using OAuth token for user ${user.email || user.id}`);
-  console.info(`📍 Location ID: ${locationId}`);
+  logger.info(`🔑 Using OAuth token for user ${user.email || user.id}`);
+  logger.info(`📍 Location ID: ${locationId}`);
 
   // ========================================================================
   // STEP 2: Get properties - DUAL-MODE LOGIC WITH LIMIT CALCULATION
@@ -166,14 +168,14 @@ export async function pushLeadsForUser(job: Job) {
     Array.isArray(payload.properties) &&
     payload.properties.length > 0
   ) {
-    console.info(
+    logger.info(
       `📦 Using pre-identified properties from daily queue (${payload.properties.length} properties)`
     );
     properties = payload.properties;
     isPreIdentified = true;
   } else {
     // Webhook mode - query database WITH REMAINING LIMIT
-    console.info(`🔍 Fetching properties from database (webhook mode)`);
+    logger.info(`🔍 Fetching properties from database (webhook mode)`);
 
     // ✅ Calculate remaining limit for today
     const todayStart = new Date();
@@ -196,7 +198,7 @@ export async function pushLeadsForUser(job: Job) {
     const remainingLimit = Math.max(0, settings.planLimit - alreadyPushed);
 
     if (remainingLimit === 0) {
-      console.info("✔ Plan limit reached, nothing to push");
+      logger.info("✔ Plan limit reached, nothing to push");
       return;
     }
 
@@ -218,17 +220,17 @@ export async function pushLeadsForUser(job: Job) {
       },
     });
 
-    console.info(
+    logger.info(
       `📊 Plan limit: ${settings.planLimit}, Already pushed: ${alreadyPushed}, Remaining: ${remainingLimit}, Found: ${properties.length} properties`
     );
   }
 
   if (!properties.length) {
-    console.info("✔ Nothing to push");
+    logger.info("✔ Nothing to push");
     return;
   }
 
-  console.info(
+  logger.info(
     `🔍 Processing ${properties.length} properties for job ${job.id} (Pre-identified: ${isPreIdentified})`
   );
 
@@ -250,7 +252,7 @@ export async function pushLeadsForUser(job: Job) {
     }
   }
 
-  console.info(`👥 Found ${contactsToPush.size} unique contacts to push`);
+  logger.info(`👥 Found ${contactsToPush.size} unique contacts to push`);
 
   const contactIdMap: Record<number, string> = {};
   let pushedContactCount = 0;
@@ -278,7 +280,7 @@ export async function pushLeadsForUser(job: Job) {
     const localContact = await findLocalContact(contact.email, contact.phone);
 
     if (localContact?.ghlContactId) {
-      console.info(
+      logger.info(
         `✅ Found existing contact in local DB: ${localContact.ghlContactId} for contact ID ${contactId}`
       );
       contactIdMap[contactId] = localContact.ghlContactId;
@@ -296,7 +298,7 @@ export async function pushLeadsForUser(job: Job) {
     );
 
     if (existingGhlId) {
-      console.info(
+      logger.info(
         `✓ Found existing contact in GHL: ${existingGhlId} for contact ID ${contactId}`
       );
       contactIdMap[contactId] = existingGhlId;
@@ -595,7 +597,7 @@ export async function pushLeadsForUser(job: Job) {
           data: { pushed: true, ghlContactId },
         });
 
-        console.info(
+        logger.info(
           `✔ Pushed contact ID ${contact.id} (GHL: ${ghlContactId})`
         );
         contactIdMap[contact.id] = ghlContactId;
@@ -635,7 +637,7 @@ export async function pushLeadsForUser(job: Job) {
     }
   }
 
-  console.info(
+  logger.info(
     `\n👥 Contact push complete: ${pushedContactCount}/${contactsToPush.size}\n`
   );
 
@@ -647,7 +649,7 @@ export async function pushLeadsForUser(job: Job) {
     const localProperty = await findLocalProperty(p.addressFull);
 
     if (localProperty?.ghlPropertyId) {
-      console.info(
+      logger.info(
         `✅ Found existing property in local DB: ${localProperty.ghlPropertyId}`
       );
 
@@ -687,7 +689,7 @@ export async function pushLeadsForUser(job: Job) {
       }
 
       if (ghlContactId && localProperty.ghlPropertyId) {
-        console.info(
+        logger.info(
           `🔗 Associating existing property ${p.id} with contact ${p.ownerId}`
         );
         await rateLimitedRequest(() =>
@@ -709,7 +711,7 @@ export async function pushLeadsForUser(job: Job) {
     );
 
     if (existingGhlId) {
-      console.info(`Found existing property in GHL: ${existingGhlId}`);
+      logger.info(`Found existing property in GHL: ${existingGhlId}`);
 
       // Mark as pushed with timestamp if not already marked
       if (!p.pushed) {
@@ -744,7 +746,7 @@ export async function pushLeadsForUser(job: Job) {
       }
 
       if (ghlContactId && existingGhlId) {
-        console.info(
+        logger.info(
           `🔗 Associating existing property ${p.id} (GHL: ${existingGhlId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`
         );
         await rateLimitedRequest(() =>
@@ -910,7 +912,7 @@ export async function pushLeadsForUser(job: Job) {
         }
 
         pushedPropertyCount++;
-        console.info(`✔ Pushed property ID ${p.id} (GHL: ${ghlPropertyId})`);
+        logger.info(`✔ Pushed property ID ${p.id} (GHL: ${ghlPropertyId})`);
 
         await updateJobProgress(job.id, {
           processed: contactsToPush.size + pushedPropertyCount,
@@ -920,7 +922,7 @@ export async function pushLeadsForUser(job: Job) {
 
         // Create association
         if (ghlPropertyId && ghlContactId) {
-          console.info(
+          logger.info(
             `🔗 Associating property ${p.id} (GHL: ${ghlPropertyId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`
           );
           await rateLimitedRequest(() =>
@@ -963,7 +965,7 @@ export async function pushLeadsForUser(job: Job) {
     }
   }
 
-  console.info(`
+  logger.info(`
 ========================================
 ✅ Job ${job.id} COMPLETE
 ========================================
@@ -972,11 +974,10 @@ export async function pushLeadsForUser(job: Job) {
 🔗 Associations created: ${associationCount}
 🔑 OAuth token used for: ${user.email || user.id}
 📍 Location ID: ${locationId}
-🎯 Mode: ${
-    isPreIdentified
+🎯 Mode: ${isPreIdentified
       ? "Daily Queue (Pre-identified)"
       : "Webhook (Query with limit)"
-  }
+    }
 ========================================
   `);
 }

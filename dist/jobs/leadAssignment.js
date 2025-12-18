@@ -1,16 +1,19 @@
 // src/jobs/leadAssignment.ts
 import { PrismaClient } from "@prisma/client";
 import { pushLeadsForUser } from "../lib/pushLeads";
+import { createLogger } from "@/lib/secureLogger";
+const logger = createLogger('LeadAssignment');
 const prisma = new PrismaClient();
 /**
  * Process a daily lead assignment job
  * This is called by workers when processing jobs from the daily queue
  */
 export async function processLeadAssignment(payload) {
-    console.log(`📋 Processing lead assignment for contact ${payload.contactId}`);
-    console.log(`   User: ${payload.userId}`);
-    console.log(`   Properties: ${payload.propertyIds.length}`);
-    console.log(`   Date: ${payload.date}`);
+    logger.info("Processing lead assignment", {
+        contactId: payload.contactId,
+        userId: payload.userId,
+        propertyCount: payload.propertyIds.length,
+    });
     try {
         // Fetch the contact
         const contact = await prisma.contact.findUnique({

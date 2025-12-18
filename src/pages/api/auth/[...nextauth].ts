@@ -6,10 +6,12 @@ import NextAuth, {
 } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
-
+import { createLogger } from "@/lib/secureLogger";
 import { PrismaClient } from "@prisma/client";
 import { TokenSet } from "next-auth/core/types";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
+const logger = createLogger('NextAuth');
+
 
 // --- Type Definitions ------------------------------------------------------
 interface GHLTokenResponse extends TokenSet {
@@ -115,7 +117,7 @@ export const authOptions: NextAuthOptions = {
           }
 
           const url = `https://services.leadconnectorhq.com/users/${userId}`;
-          console.log("[userinfo] Fetching user info:", url);
+          logger.debug("[userinfo] Fetching user info", { userId: tokens.userId });
 
           const res = await fetch(url, {
             headers: {
@@ -125,7 +127,12 @@ export const authOptions: NextAuthOptions = {
           });
           const text = await res.text();
 
-          console.log("[userinfo] Status:", res.status, "Body:", text);
+          logger.debug("[userinfo] Response received", {
+            status: res.status,
+            hasBody: !!text,
+            bodyLength: text?.length || 0
+          });
+
           if (!res.ok) {
             throw new Error(`Bad response: ${res.status}`);
           }
@@ -139,7 +146,12 @@ export const authOptions: NextAuthOptions = {
             console.error("[userinfo] JSON.parse failed:", text, errorMessage);
             throw err;
           }
-          console.log("[userinfo] Parsed JSON:", json);
+
+          logger.debug("[userinfo] User info parsed", {
+            userId: tokens.userId,
+            hasName: !!json.name,
+            hasEmail: !!json.email
+          });
 
           // Return profile with additional metadata
           const profile: ExtendedProfile = {
@@ -202,13 +214,13 @@ export const authOptions: NextAuthOptions = {
   ],
   callbacks: {
     async jwt({ token, account, user }) {
-      console.log("[jwt] Callback triggered", { hasAccount: !!account, hasUser: !!user });
+      logger.debug("[jwt] Callback triggered", { hasAccount: !!account, hasUser: !!user });
       if (account && user) {
         // ... (existing logic)
         // Cast account to access extended fields
         const extendedAccount = account as ExtendedAccount;
 
-        console.log("[jwt] Updating user tokens for:", user.id);
+        logger.info("[jwt] Updating user tokens for:", user.id);
 
         // Store tokens in database using update (user created via adapter)
         try {
@@ -225,9 +237,9 @@ export const authOptions: NextAuthOptions = {
               companyId: extendedAccount.companyId,
             },
           });
-          console.log("[jwt] User tokens updated successfully");
+          logger.info("[jwt] User tokens updated successfully");
         } catch (e) {
-          console.error("[jwt] Token update error:", e);
+          logger.error("[jwt] Token update error:", e);
         }
 
         token.sub = user.id;
@@ -241,7 +253,10 @@ export const authOptions: NextAuthOptions = {
     },
 
     async session({ session, token }) {
-      console.log("[session] Callback triggered. Token userId:", token.userId);
+      logger.debug("[session] Callback triggered", {
+        userId: token.userId,
+        hasEmail: !!token.email  // ✅ Log flag, not actual email
+      });
       if (session.user) {
         session.user.userId = token.userId;
         session.user.email = token.email ?? null;

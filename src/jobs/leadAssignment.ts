@@ -4,7 +4,9 @@ import { DailyLeadAssignmentPayload } from "../lib/queue";
 import { pushLeadsForUser } from "../lib/pushLeads";
 import type { Job } from "@prisma/client";
 import { Prisma } from "@prisma/client";
+import { createLogger } from "@/lib/secureLogger";
 
+const logger = createLogger('LeadAssignment');
 const prisma = new PrismaClient();
 
 /**
@@ -14,10 +16,11 @@ const prisma = new PrismaClient();
 export async function processLeadAssignment(
   payload: DailyLeadAssignmentPayload
 ): Promise<void> {
-  console.log(`📋 Processing lead assignment for contact ${payload.contactId}`);
-  console.log(`   User: ${payload.userId}`);
-  console.log(`   Properties: ${payload.propertyIds.length}`);
-  console.log(`   Date: ${payload.date}`);
+  logger.info("Processing lead assignment", {
+    contactId: payload.contactId,
+    userId: payload.userId,
+    propertyCount: payload.propertyIds.length,
+  });
 
   try {
     // Fetch the contact

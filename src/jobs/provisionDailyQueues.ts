@@ -14,6 +14,9 @@ import {
 } from "../lib/timezone";
 import { generateIdempotencyKey } from "../lib/idempotency";
 import { DateTime } from "luxon";
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('ProvisionQueues');
 
 const prisma = new PrismaClient();
 
@@ -144,7 +147,7 @@ export async function provisionDailyQueues(
     for (const user of users) {
       if (!user.settings) continue;
 
-      console.log(`\n👤 Processing user: ${user.email || user.id}`);
+      logger.info("Processing user", { userId: user.id });
 
       // ✅ NEW: Check how many properties already pushed today
       const alreadyPushedCount = await getPropertiesPushedToday(

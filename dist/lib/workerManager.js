@@ -6,7 +6,9 @@ import { EventEmitter } from "events";
 import { updateJobProgress } from "./jobProgress";
 import { checkAndClaimIdempotency, markIdempotencyCompleted, markIdempotencyFailed, } from "./idempotency";
 import { pushLeadsForUser } from "./pushLeads";
-import { sendJobFailureAlert } from "./alerts"; // ← NEW: Alert system import
+import { sendJobFailureAlert } from "./alerts";
+import { createLogger } from "@/lib/secureLogger";
+const logger = createLogger('WorkerManager');
 const prisma = new PrismaClient();
 export class WorkerManager {
     constructor(config, eventEmitter) {
@@ -26,20 +28,20 @@ export class WorkerManager {
     }
     async start() {
         if (this.isRunning) {
-            console.log(`⚠️ Worker ${this.workerId} is already running`);
+            logger.info(`⚠️ Worker ${this.workerId} is already running`);
             return;
         }
-        console.log(`🚀 Worker ${this.workerId} starting...`);
+        logger.info(`🚀 Worker ${this.workerId} starting...`);
         const targetQueue = this.useDailyQueue
             ? getTodayQueueName()
             : this.queueName;
         if (targetQueue) {
-            console.log(`   📍 Binding to queue: ${targetQueue}`);
+            logger.info(`   📍 Binding to queue: ${targetQueue}`);
         }
         else {
-            console.log(`   📍 Binding to all queues`);
+            logger.info(`   📍 Binding to all queues`);
         }
-        console.log(`   🔢 Concurrency: ${this.concurrency}`);
+        logger.info(`   🔢 Concurrency: ${this.concurrency}`);
         this.isRunning = true;
         setupMemoryMonitoring(this.workerId);
         const boss = await getQueueInstance();
@@ -55,24 +57,24 @@ export class WorkerManager {
                 const job = jobArray[0];
                 await this.processDailyLeadJob(job);
             });
-            console.log(`✅ Worker ${this.workerId} subscribed to: ${queueToSubscribe}`);
+            logger.info(`✅ Worker ${this.workerId} subscribed to: ${queueToSubscribe}`);
         }
-        console.log(`ℹ️  Worker ${this.workerId} using default pg-boss concurrency`);
-        console.log(`   Concurrency is controlled by total number of workers`);
-        console.log(`✅ Worker ${this.workerId} is now processing jobs`);
+        logger.info(`ℹ️  Worker ${this.workerId} using default pg-boss concurrency`);
+        logger.info(`   Concurrency is controlled by total number of workers`);
+        logger.info(`✅ Worker ${this.workerId} is now processing jobs`);
     }
     async processDailyLeadJob(job) {
         this.activeJobs++;
         const startTime = Date.now();
         const payload = job.data;
-        console.log(`👷 Worker ${this.workerId} processing daily lead job ${job.id} ` +
+        logger.info(`👷 Worker ${this.workerId} processing daily lead job ${job.id} ` +
             `(Contact: ${payload.contactId}, Properties: ${payload.propertyIds.length}) ` +
             `(Active: ${this.activeJobs})`);
         try {
             const queueName = this.useDailyQueue ? getTodayQueueName() : job.name;
             const idempotencyCheck = await checkAndClaimIdempotency(queueName, payload.idempotencyKey, job.id);
             if (!idempotencyCheck.shouldProcess) {
-                console.log(`⏩ Skipping job ${job.id} - already processed (idempotency)`);
+                logger.info(`⏩ Skipping job ${job.id} - already processed (idempotency)`);
                 return;
             }
             const existingJob = await prisma.job.findUnique({
@@ -114,7 +116,7 @@ export class WorkerManager {
             if (properties.length === 0) {
                 throw new Error(`No properties found for IDs: ${payload.propertyIds.join(", ")}`);
             }
-            console.log(`   📦 Processing ${properties.length} properties for contact ${contact.id}`);
+            logger.info(`   📦 Processing ${properties.length} properties for contact ${contact.id}`);
             const syntheticJob = {
                 id: job.id,
                 type: job.name,
@@ -149,7 +151,7 @@ export class WorkerManager {
             const processingTime = Date.now() - startTime;
             this.metrics.jobsProcessed++;
             this.metrics.totalProcessingTime += processingTime;
-            console.log(`✅ Worker ${this.workerId} completed job ${job.id} ` +
+            logger.info(`✅ Worker ${this.workerId} completed job ${job.id} ` +
                 `in ${(processingTime / 1000).toFixed(2)}s`);
         }
         catch (error) {
@@ -168,7 +170,7 @@ export class WorkerManager {
             // Determine if job has exceeded max attempts
             const isFinalFailure = attempts >= maxAttempts;
             const newStatus = isFinalFailure ? "failed" : "pending";
-            console.log(`   📊 Attempt ${attempts}/${maxAttempts} - Status: ${newStatus}`);
+            logger.info(`   📊 Attempt ${attempts}/${maxAttempts} - Status: ${newStatus}`);
             // Mark idempotency as failed
             const queueName = this.useDailyQueue ? getTodayQueueName() : job.name;
             await markIdempotencyFailed(queueName, payload.idempotencyKey, error);
@@ -200,10 +202,10 @@ export class WorkerManager {
             // ✅ NEW: Send alert if max attempts reached
             // ========================================================================
             if (isFinalFailure && updatedJob) {
-                console.log(`🚨 Job ${job.id} exceeded max attempts (${attempts}/${maxAttempts}), sending alerts...`);
+                logger.info(`🚨 Job ${job.id} exceeded max attempts (${attempts}/${maxAttempts}), sending alerts...`);
                 try {
                     await sendJobFailureAlert(updatedJob);
-                    console.log(`✅ Alert sent successfully for job ${job.id}`);
+                    logger.info(`✅ Alert sent successfully for job ${job.id}`);
                 }
                 catch (alertError) {
                     // Don't let alert failures crash the worker
@@ -217,7 +219,7 @@ export class WorkerManager {
                 console.warn(`⚠️ Job ${job.id} failed but could not retrieve from database for alert`);
             }
             else {
-                console.log(`🔄 Job ${job.id} will be retried (${attempts}/${maxAttempts})`);
+                logger.info(`🔄 Job ${job.id} will be retried (${attempts}/${maxAttempts})`);
             }
             throw error;
         }
@@ -230,7 +232,7 @@ export class WorkerManager {
         this.activeJobs++;
         const startTime = Date.now();
         const payload = job.data;
-        console.log(`👷 Worker ${this.workerId} processing batch job ${job.id} ` +
+        logger.info(`👷 Worker ${this.workerId} processing batch job ${job.id} ` +
             `(Batch ${payload.batchIndex + 1}/${payload.totalBatches}) ` +
             `(Active: ${this.activeJobs})`);
         try {
@@ -271,7 +273,7 @@ export class WorkerManager {
             const processingTime = Date.now() - startTime;
             this.metrics.jobsProcessed++;
             this.metrics.totalProcessingTime += processingTime;
-            console.log(`✅ Worker ${this.workerId} completed batch job ${job.id} ` +
+            logger.info(`✅ Worker ${this.workerId} completed batch job ${job.id} ` +
                 `in ${(processingTime / 1000).toFixed(2)}s`);
         }
         catch (error) {
@@ -290,7 +292,7 @@ export class WorkerManager {
             // Determine if job has exceeded max attempts
             const isFinalFailure = attempts >= maxAttempts;
             const newStatus = isFinalFailure ? "failed" : "pending";
-            console.log(`   📊 Attempt ${attempts}/${maxAttempts} - Status: ${newStatus}`);
+            logger.info(`   📊 Attempt ${attempts}/${maxAttempts} - Status: ${newStatus}`);
             // Update job in database
             const updatedJob = await prisma.job
                 .upsert({
@@ -319,10 +321,10 @@ export class WorkerManager {
             // ✅ NEW: Send alert if max attempts reached
             // ========================================================================
             if (isFinalFailure && updatedJob) {
-                console.log(`🚨 Batch job ${job.id} exceeded max attempts (${attempts}/${maxAttempts}), sending alerts...`);
+                logger.info(`🚨 Batch job ${job.id} exceeded max attempts (${attempts}/${maxAttempts}), sending alerts...`);
                 try {
                     await sendJobFailureAlert(updatedJob);
-                    console.log(`✅ Alert sent successfully for batch job ${job.id}`);
+                    logger.info(`✅ Alert sent successfully for batch job ${job.id}`);
                 }
                 catch (alertError) {
                     // Don't let alert failures crash the worker
@@ -336,7 +338,7 @@ export class WorkerManager {
                 console.warn(`⚠️ Batch job ${job.id} failed but could not retrieve from database for alert`);
             }
             else {
-                console.log(`🔄 Batch job ${job.id} will be retried (${attempts}/${maxAttempts})`);
+                logger.info(`🔄 Batch job ${job.id} will be retried (${attempts}/${maxAttempts})`);
             }
             throw error;
         }
@@ -368,7 +370,7 @@ export class WorkerManager {
             skip: offset,
             take: batchSize,
         });
-        console.log(`📦 Worker ${this.workerId} processing batch ${batchIndex + 1}/${totalBatches}: ` +
+        logger.info(`📦 Worker ${this.workerId} processing batch ${batchIndex + 1}/${totalBatches}: ` +
             `${properties.length} properties (offset: ${offset})`);
         await this.pushPropertiesBatch(properties, user, payload, jobId);
     }
@@ -377,7 +379,7 @@ export class WorkerManager {
             processed: payload.batchIndex * payload.batchSize,
             total: payload.totalBatches * payload.batchSize,
             status: `Processing batch ${payload.batchIndex + 1}/${payload.totalBatches}`,
-        }).catch((e) => console.log("Failed to update progress:", e));
+        }).catch((e) => logger.info("Failed to update progress:", e));
         const syntheticJob = {
             id: jobId,
             type: JOB_TYPES.DELIVER_LEADS_BATCH,
@@ -400,7 +402,7 @@ export class WorkerManager {
             processed: (payload.batchIndex + 1) * payload.batchSize,
             total: payload.totalBatches * payload.batchSize,
             status: `Completed batch ${payload.batchIndex + 1}/${payload.totalBatches}`,
-        }).catch((e) => console.log("Failed to update progress:", e));
+        }).catch((e) => logger.info("Failed to update progress:", e));
     }
     emitMetrics() {
         this.eventEmitter.emit("jobCompleted", {
@@ -408,7 +410,7 @@ export class WorkerManager {
             activeJobs: this.activeJobs,
             metrics: this.getMetrics(),
         });
-        console.log(`📊 Worker ${this.workerId} - ` +
+        logger.info(`📊 Worker ${this.workerId} - ` +
             `Active: ${this.activeJobs} | ` +
             `Processed: ${this.metrics.jobsProcessed} | ` +
             `Failed: ${this.metrics.jobsFailed} | ` +
@@ -418,21 +420,21 @@ export class WorkerManager {
         if (!this.isRunning) {
             return;
         }
-        console.log(`🛑 Worker ${this.workerId} stopping...`);
+        logger.info(`🛑 Worker ${this.workerId} stopping...`);
         this.isRunning = false;
         const timeout = 30000;
         const startTime = Date.now();
         while (this.activeJobs > 0 && Date.now() - startTime < timeout) {
-            console.log(`⏳ Worker ${this.workerId} waiting for ${this.activeJobs} active jobs...`);
+            logger.info(`⏳ Worker ${this.workerId} waiting for ${this.activeJobs} active jobs...`);
             await new Promise((resolve) => setTimeout(resolve, 1000));
         }
         if (this.activeJobs > 0) {
             console.warn(`⚠️ Worker ${this.workerId} forced shutdown with ${this.activeJobs} active jobs`);
         }
         else {
-            console.log(`✅ Worker ${this.workerId} stopped cleanly`);
+            logger.info(`✅ Worker ${this.workerId} stopped cleanly`);
         }
-        console.log(`📊 Final metrics for Worker ${this.workerId}:`, this.getMetrics());
+        logger.info(`📊 Final metrics for Worker ${this.workerId}:`, this.getMetrics());
     }
     getStatus() {
         return {
@@ -463,6 +465,6 @@ export class WorkerManager {
             jobsFailed: 0,
             totalProcessingTime: 0,
         };
-        console.log(`🔄 Worker ${this.workerId} metrics reset`);
+        logger.info(`🔄 Worker ${this.workerId} metrics reset`);
     }
 }

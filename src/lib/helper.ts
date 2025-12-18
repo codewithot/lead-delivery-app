@@ -12,6 +12,8 @@ import {
   normalizeAddress,
   normalizeAddressForFuzzyMatch,
 } from "./normalizers";
+import { createLogger } from "@/lib/secureLogger";
+const logger = createLogger('PushLeads');
 
 interface CountriesLib {
   registerLocale(locale: unknown): void;
@@ -660,14 +662,12 @@ export async function ensureContactPropertyAssociation(
     );
 
     if (res?.success) {
-      console.info("🔗 Associated contact <> property", {
-        contactName,
-        contactGhlId,
-        propertyGhlId,
+      logger.info("Associated contact with property", {
+        contactId: contactGhlId,
+        propertyId: propertyGhlId,
       });
     } else {
       console.error("❌ Could not create relation:", res?.error ?? res, {
-        contactName,
         contactGhlId,
         propertyGhlId,
       });
@@ -1050,11 +1050,10 @@ export async function findGhlContactByEmailOrPhone(
   privateToken: string,
   locationId: string
 ): Promise<string | undefined> {
-  console.info(
-    `🔍 Searching for existing contact - Email: ${email || "N/A"}, Phone: ${
-      phone || "N/A"
-    }`
-  );
+  logger.info("Searching for existing contact", {
+    hasEmail: !!email,
+    hasPhone: !!phone,
+  });
 
   if (!email && !phone) {
     console.warn(`⚠️ No email or phone provided for contact search`);
@@ -1077,11 +1076,12 @@ export async function findGhlContactByEmailOrPhone(
   const normalizedEmail = emailNormResult.normalized;
   const normalizedPhone = phoneNormResult.normalized;
 
-  console.debug(
-    `🔍 Searching with normalized values - Email: ${
-      normalizedEmail || "N/A"
-    }, Phone: ${normalizedPhone || "N/A"}`
-  );
+  logger.debug("Using normalized search values", {
+    emailNormalized: !!normalizedEmail,
+    emailValid: emailNormResult.isValid,
+    phoneNormalized: !!normalizedPhone,
+    phoneValid: phoneNormResult.isValid,
+  });
 
   try {
     const headers = {
@@ -1092,7 +1092,8 @@ export async function findGhlContactByEmailOrPhone(
 
     // 1️⃣ Try searching by normalized email first (if available and valid)
     if (normalizedEmail && emailNormResult.isValid) {
-      console.debug(`📧 Searching GHL by normalized email: ${normalizedEmail}`);
+      logger.debug("Searching GHL by email");
+
       try {
         const resp = await axios.get(
           `${GHL_BASE_URL}/contacts/search/duplicate`,
@@ -1107,7 +1108,7 @@ export async function findGhlContactByEmailOrPhone(
 
         const contact = resp.data?.contact || resp.data;
         if (contact?.id) {
-          console.info(`✅ Found contact by email: ${contact.id}`);
+          logger.info("Found existing contact", { contactId: contact.id });
           return contact.id;
         }
       } catch (emailError) {
@@ -1153,7 +1154,7 @@ export async function findGhlContactByEmailOrPhone(
 
           const contact = resp.data?.contact || resp.data;
           if (contact?.id) {
-            console.info(`✅ Found contact by original email: ${contact.id}`);
+            logger.info("Found existing contact", { contactId: contact.id });
             return contact.id;
           }
         } catch {
@@ -1164,7 +1165,7 @@ export async function findGhlContactByEmailOrPhone(
 
     // 2️⃣ Try searching by normalized phone (if email search failed and phone is valid)
     if (normalizedPhone && phoneNormResult.isValid) {
-      console.debug(`📱 Searching GHL by normalized phone: ${normalizedPhone}`);
+      logger.debug("Searching GHL by phone");
       try {
         const resp = await axios.get(
           `${GHL_BASE_URL}/contacts/search/duplicate`,
@@ -1179,7 +1180,7 @@ export async function findGhlContactByEmailOrPhone(
 
         const contact = resp.data?.contact || resp.data;
         if (contact?.id) {
-          console.info(`✅ Found contact by phone: ${contact.id}`);
+          logger.info("Found existing contact", { contactId: contact.id });
           return contact.id;
         }
       } catch (phoneError) {
@@ -1225,7 +1226,7 @@ export async function findGhlContactByEmailOrPhone(
 
           const contact = resp.data?.contact || resp.data;
           if (contact?.id) {
-            console.info(`✅ Found contact by original phone: ${contact.id}`);
+            logger.info("Found existing contact", { contactId: contact.id });
             return contact.id;
           }
         } catch {
@@ -1290,9 +1291,11 @@ export async function findGhlPropertyByAddress(
 
   const searchAddress = normalizedAddress || address;
 
-  console.info(`🏠 Searching for existing property: ${searchAddress}`);
-  console.debug(`🔍 Original address: ${address}`);
-  console.debug(`🔍 Normalized address: ${normalizedAddress}`);
+  logger.info("Searching for existing property", {
+    hasAddress: !!searchAddress,
+    addressLength: searchAddress?.length || 0,
+    wasNormalized: normalizedAddress !== address,
+  });
 
   try {
     const headers = {

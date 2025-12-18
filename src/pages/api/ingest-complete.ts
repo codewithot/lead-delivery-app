@@ -10,6 +10,9 @@ import {
 import { spawn } from "child_process";
 import path from "path";
 import { withRateLimit } from "@/lib/apiRateLimiter";
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('IngestWebhook');
 
 const prisma = new PrismaClient();
 
@@ -28,7 +31,7 @@ async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  console.log("📥 Webhook received");
+  logger.info("📥 Webhook received");
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -39,13 +42,13 @@ async function handler(
     const hookSecret = headers["x-hook-secret"];
 
     if (!hookSecret || hookSecret !== process.env.WEBHOOK_SECRET) {
-      console.log("❌ Invalid or missing webhook secret");
+      logger.info("❌ Invalid or missing webhook secret");
       return res.status(401).json({ error: "Unauthorized" });
     }
 
     const body = req.body;
     if (!body) {
-      console.log("❌ Empty request body");
+      logger.info("❌ Empty request body");
       return res.status(400).json({ error: "Request body is required" });
     }
 
@@ -60,7 +63,7 @@ async function handler(
           receivedAt: new Date(),
         },
       });
-      console.log("✅ Webhook logged successfully");
+      logger.info("✅ Webhook logged successfully");
     } catch (logError) {
       const logErrorMessage =
         logError instanceof Error ? logError.message : String(logError);
@@ -71,7 +74,7 @@ async function handler(
     let validatedData;
     try {
       validatedData = webhookSchema.parse(body);
-      console.log("✅ Payload validated:", validatedData);
+      logger.info("✅ Payload validated:", validatedData);
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
@@ -83,7 +86,7 @@ async function handler(
       });
     }
 
-    console.log("🎯 Processing webhook for runId:", validatedData.runId);
+    logger.info("🎯 Processing webhook for runId:", validatedData.runId);
 
     // Get queue instance
     const boss = await getQueueInstance();
@@ -99,7 +102,7 @@ async function handler(
       },
     });
 
-    console.log(`📋 Found ${users.length} users to process`);
+    logger.info(`📋 Found ${users.length} users to process`);
 
     let totalJobsCreated = 0;
     let totalPropertiesFound = 0;
@@ -107,7 +110,7 @@ async function handler(
     // Create batched jobs for each user
     for (const user of users) {
       if (!user.settings) {
-        console.log(`⚠️ User ${user.id} has no settings, skipping`);
+        logger.info(`⚠️ User ${user.id} has no settings, skipping`);
         continue;
       }
 
@@ -135,13 +138,13 @@ async function handler(
       );
 
       if (remainingLimit === 0) {
-        console.log(
+        logger.info(
           `ℹ️  User ${user.id} has reached plan limit (${user.settings.planLimit})`
         );
         continue;
       }
 
-      console.log(
+      logger.info(
         `👤 User ${user.id}: Plan limit ${user.settings.planLimit}, Already pushed: ${alreadyPushed}, Remaining: ${remainingLimit}`
       );
 
@@ -161,7 +164,7 @@ async function handler(
       const effectiveCount = Math.min(propertyCount, remainingLimit);
 
       if (effectiveCount === 0) {
-        console.log(`ℹ️  User ${user.id} has no properties to push`);
+        logger.info(`ℹ️  User ${user.id} has no properties to push`);
         continue;
       }
 
@@ -170,7 +173,7 @@ async function handler(
       // Calculate number of batches based on effective count
       const batchCount = Math.ceil(effectiveCount / PROPERTIES_PER_BATCH);
 
-      console.log(
+      logger.info(
         `👤 User ${user.id}: ${effectiveCount} properties (limit: ${remainingLimit}) → ${batchCount} batches`
       );
 
@@ -215,21 +218,21 @@ async function handler(
         });
 
         totalJobsCreated++;
-        console.log(
+        logger.info(
           `✅ Created batch job ${batchIndex + 1}/${batchCount} for user ${user.id
           }`
         );
       }
     }
 
-    console.log(`\n🎉 Job creation complete:`);
-    console.log(`   📊 Properties found: ${totalPropertiesFound}`);
-    console.log(`   📦 Jobs created: ${totalJobsCreated}`);
-    console.log(`   👥 Users processed: ${users.length}\n`);
+    logger.info(`\n🎉 Job creation complete:`);
+    logger.info(`   📊 Properties found: ${totalPropertiesFound}`);
+    logger.info(`   📦 Jobs created: ${totalJobsCreated}`);
+    logger.info(`   👥 Users processed: ${users.length}\n`);
 
     // 🚀 Spawn worker process (if not using long-running workers)
     if (process.env.USE_STANDALONE_WORKERS === "true") {
-      console.log("\n🔥 Spawning standalone worker process...\n");
+      logger.info("\n🔥 Spawning standalone worker process...\n");
 
       try {
         const workerScript = path.join(
@@ -251,7 +254,7 @@ async function handler(
 
         workerProcess.unref();
 
-        console.log(
+        logger.info(
           `✅ Worker process spawned with PID: ${workerProcess.pid}\n`
         );
       } catch (error) {
@@ -261,7 +264,7 @@ async function handler(
         // Don't fail the webhook - jobs are queued
       }
     } else {
-      console.log("ℹ️  Using long-running workers (not spawning)");
+      logger.info("ℹ️  Using long-running workers (not spawning)");
     }
 
     return res.status(200).json({

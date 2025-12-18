@@ -4,6 +4,8 @@ import { getQueueInstance, JOB_TYPES, getDailyQueueName, } from "../lib/queue";
 import { todayYYYYMMDD, getRegionTimezone, formatForLog, getProvisionTimes, } from "../lib/timezone";
 import { generateIdempotencyKey } from "../lib/idempotency";
 import { DateTime } from "luxon";
+import { createLogger } from "@/lib/secureLogger";
+const logger = createLogger('ProvisionQueues');
 const prisma = new PrismaClient();
 /**
  * Helper: Convert YYYYMMDD string to DateTime
@@ -97,7 +99,7 @@ export async function provisionDailyQueues(options = {}) {
         for (const user of users) {
             if (!user.settings)
                 continue;
-            console.log(`\n👤 Processing user: ${user.email || user.id}`);
+            logger.info("Processing user", { userId: user.id });
             // ✅ NEW: Check how many properties already pushed today
             const alreadyPushedCount = await getPropertiesPushedToday(user.id, user.settings, date);
             const remainingLimit = Math.max(0, user.settings.planLimit - alreadyPushedCount);
