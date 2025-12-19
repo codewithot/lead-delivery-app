@@ -94,9 +94,9 @@ export const authOptions: NextAuthOptions = {
               expires_at: expiresAt,
               token_type: data.token_type,
               scope: data.scope,
-              locationId: data.locationId,
-              companyId: data.companyId,
-              userId: data.userId,
+              locationId: data.location_id || data.locationId,
+              companyId: data.company_id || data.companyId,
+              userId: data.user_id || data.userId,
             },
           };
         },
@@ -214,40 +214,49 @@ export const authOptions: NextAuthOptions = {
   ],
   callbacks: {
     async jwt({ token, account, user }) {
-      logger.debug("[jwt] Callback triggered", { hasAccount: !!account, hasUser: !!user });
-      if (account && user) {
-        // ... (existing logic)
-        // Cast account to access extended fields
-        const extendedAccount = account as ExtendedAccount;
-
-        logger.info("[jwt] Updating user tokens for:", user.id);
-
-        // Store tokens in database using update (user created via adapter)
-        try {
-          // Note: The adapter handles user creation, but we update tokens here
-          await prisma.user.update({
-            where: { id: user.id },
-            data: {
-              accessToken: account.access_token,
-              refreshToken: account.refresh_token,
-              tokenExpiresAt: account.expires_at
-                ? new Date(account.expires_at * 1000)
-                : undefined,
-              locationId: extendedAccount.locationId,
-              companyId: extendedAccount.companyId,
-            },
-          });
-          logger.info("[jwt] User tokens updated successfully");
-        } catch (e) {
-          logger.error("[jwt] Token update error:", e);
-        }
-
+      if (user) {
+        logger.info("[jwt] User login detected", { userId: user.id, email: user.email });
         token.sub = user.id;
         token.userId = user.id;
         token.email = user.email ?? undefined;
-        token.role = user.role || 'USER'; // Add role to token
-        token.locationId = extendedAccount.locationId;
-        token.companyId = extendedAccount.companyId;
+        token.role = (user as { role?: string }).role || 'USER';
+        token.locationId = (user as { locationId?: string }).locationId ?? undefined;
+        token.companyId = (user as { companyId?: string }).companyId ?? undefined;
+
+        if (account) {
+          const extendedAccount = account as ExtendedAccount;
+          logger.info("[jwt] OAuth account detected", {
+            provider: account.provider,
+            locationId: extendedAccount.locationId,
+            companyId: extendedAccount.companyId
+          });
+
+          if (extendedAccount.locationId) token.locationId = extendedAccount.locationId;
+          if (extendedAccount.companyId) token.companyId = extendedAccount.companyId;
+
+          // Store tokens in database using update
+          try {
+            await prisma.user.update({
+              where: { id: user.id },
+              data: {
+                accessToken: account.access_token,
+                refreshToken: account.refresh_token,
+                tokenExpiresAt: account.expires_at
+                  ? new Date(account.expires_at * 1000)
+                  : undefined,
+                locationId: token.locationId,
+                companyId: token.companyId,
+              },
+            });
+            logger.info("[jwt] User tokens and IDs updated in DB");
+          } catch (e) {
+            logger.error("[jwt] Token update error:", e);
+          }
+        } else {
+          logger.info("[jwt] Credential login or existing session", {
+            hasLocationId: !!token.locationId
+          });
+        }
       }
       return token;
     },
@@ -255,12 +264,14 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       logger.debug("[session] Callback triggered", {
         userId: token.userId,
-        hasEmail: !!token.email  // ✅ Log flag, not actual email
+        locationId: token.locationId
       });
       if (session.user) {
         session.user.userId = token.userId;
         session.user.email = token.email ?? null;
-        session.user.role = token.role; // Add role to session
+        session.user.role = token.role;
+        session.user.locationId = token.locationId;
+        session.user.companyId = token.companyId;
       }
       return session;
     },

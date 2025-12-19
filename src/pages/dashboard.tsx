@@ -1,5 +1,5 @@
 
-import { useSession } from "next-auth/react";
+import { useSession, signIn } from "next-auth/react";
 import { useEffect } from "react";
 import { useRouter } from "next/router";
 import React from "react";
@@ -58,8 +58,41 @@ const fetcher = async (url: string) => {
 export default function DashboardPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
+  const [authError, setAuthError] = React.useState<string | null>(null);
 
-  const { data: jobs, error } = useSWR<Job[]>(
+  useEffect(() => {
+    if (router.query.error) {
+      const errorStr = router.query.error as string;
+      if (errorStr === "OAuthAccountNotLinked" || errorStr === "Callback") {
+        setAuthError("This GoHighLevel account is already connected to another user. Each GHL account can only be linked to one ProEdge user.");
+      } else {
+        setAuthError("An error occurred during authentication. Please try again.");
+      }
+
+      // Clean up the URL
+      const rest = { ...router.query };
+      delete rest.error;
+      router.replace({ pathname: router.pathname, query: rest }, undefined, { shallow: true });
+    }
+  }, [router.query, router]);
+
+  useEffect(() => {
+    if (session) {
+      console.log("[Dashboard] Session data:", {
+        userId: session.user?.userId,
+        email: session.user?.email,
+        locationId: session.user?.locationId,
+        companyId: session.user?.companyId
+      });
+    }
+  }, [session]);
+
+  // Helper for GHL connection
+  const handleConnectGHL = () => {
+    signIn("gh", { callbackUrl: "/dashboard" });
+  };
+
+  const { data: jobs, error: jobsError } = useSWR<Job[]>(
     status === "authenticated" ? "/api/jobs" : null,
     fetcher
   );
@@ -101,21 +134,20 @@ export default function DashboardPage() {
   if (status === "loading" || !session) {
     return (
       <Layout>
-        <div className="flex flex-col items-center justify-center min-h-[50vh]">
-          <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div>
-          <p className="mt-4 text-gray-400">Loading your dashboard...</p>
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
         </div>
       </Layout>
     );
   }
 
-  if (error) {
+  if (jobsError) {
     return (
       <Layout>
         <div className="max-w-4xl mx-auto p-4">
           <div className="bg-red-500/10 border border-red-500/50 rounded-xl p-6 text-center">
             <h3 className="text-xl font-bold text-red-500 mb-2">Failed to load data</h3>
-            <p className="text-gray-400 mb-4">{error.message}</p>
+            <p className="text-gray-400 mb-4">{jobsError.message}</p>
             <button
               onClick={() => window.location.reload()}
               className="px-6 py-2 bg-red-600 hover:bg-red-700 text-white rounded-full transition-colors font-medium"
@@ -150,6 +182,49 @@ export default function DashboardPage() {
             </Link>
           </div>
         </div>
+
+        {/* Authentication Error Alert */}
+        {authError && (
+          <div className="mb-8 p-4 bg-red-500/10 border border-red-500/50 rounded-xl flex items-center gap-3 animate-shake">
+            <svg className="w-6 h-6 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <div className="flex-1">
+              <p className="text-red-200 text-sm font-medium">{authError}</p>
+            </div>
+            <button onClick={() => setAuthError(null)} className="text-red-400 hover:text-red-200 transition-colors">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+
+        {/* GHL Connection Prompt for First-Time Users */}
+        {!session?.user?.locationId && (
+          <div className="glass-panel p-8 rounded-2xl border border-blue-500/30 bg-blue-500/5 animate-pulse-subtle">
+            <div className="flex flex-col md:flex-row items-center gap-6">
+              <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-lg shadow-blue-500/20">
+                <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <div className="flex-1 text-center md:text-left">
+                <h2 className="text-xl font-bold text-white mb-2">Connect Your GoHighLevel Account</h2>
+                <p className="text-gray-400 max-w-2xl">
+                  To start receiving automated real-estate leads, you need to connect your GoHighLevel sub-account.
+                  This is a one-time setup that ensures seamless lead delivery directly to your CRM.
+                </p>
+              </div>
+              <button
+                onClick={handleConnectGHL}
+                className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] hover:shadow-[0_0_30px_rgba(37,99,235,0.5)] transform hover:-translate-y-1"
+              >
+                Connect Now
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Usage Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

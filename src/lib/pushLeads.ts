@@ -156,28 +156,25 @@ export async function pushLeadsForUser(job: Job) {
   logger.info(`📍 Location ID: ${locationId}`);
 
   // ========================================================================
-  // STEP 2: Get properties - DUAL-MODE LOGIC WITH LIMIT CALCULATION
+  // STEP 2: Determine total to process and batching strategy
   // ========================================================================
-  const payload = job.payload as unknown as PushLeadsPayload; // ✅ Fixed type casting
-  let properties: (Property & { owner: Contact | null })[];
+  const payload = job.payload as unknown as PushLeadsPayload;
+  const BATCH_SIZE = 50;
+  let preIdentifiedProps: (Property & { owner: Contact | null })[] = [];
+  let totalToProcess = 0;
   let isPreIdentified = false;
 
-  // Check if this is daily queue mode (properties already identified)
   if (
     payload.properties &&
     Array.isArray(payload.properties) &&
     payload.properties.length > 0
   ) {
-    logger.info(
-      `📦 Using pre-identified properties from daily queue (${payload.properties.length} properties)`
-    );
-    properties = payload.properties;
+    logger.info(`📦 Daily queue mode: ${payload.properties.length} properties provided`);
+    preIdentifiedProps = payload.properties;
+    totalToProcess = preIdentifiedProps.length;
     isPreIdentified = true;
   } else {
-    // Webhook mode - query database WITH REMAINING LIMIT
-    logger.info(`🔍 Fetching properties from database (webhook mode)`);
-
-    // ✅ Calculate remaining limit for today
+    logger.info(`🔍 Webhook mode: calculating limits and count`);
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
@@ -189,20 +186,17 @@ export async function pushLeadsForUser(job: Job) {
           lte: settings.priceMax ?? Number.MAX_SAFE_INTEGER,
         },
         postalCode: { in: settings.zipCodes },
-        pushedAt: {
-          gte: todayStart,
-        },
+        pushedAt: { gte: todayStart },
       },
     });
 
     const remainingLimit = Math.max(0, settings.planLimit - alreadyPushed);
-
     if (remainingLimit === 0) {
-      logger.info("✔ Plan limit reached, nothing to push");
+      logger.info("✔ Plan limit reached for today, skipping");
       return;
     }
 
-    properties = await prisma.property.findMany({
+    const foundCount = await prisma.property.count({
       where: {
         price: {
           gte: settings.priceMin ?? 0,
@@ -211,24 +205,21 @@ export async function pushLeadsForUser(job: Job) {
         postalCode: { in: settings.zipCodes },
         pushed: false,
       },
-      include: {
-        owner: true,
-      },
-      take: remainingLimit, // ✅ Use remaining limit instead of full planLimit
-      orderBy: {
-        createdAt: "asc", // ✅ FIFO - oldest properties first
-      },
     });
 
-    logger.info(
-      `📊 Plan limit: ${settings.planLimit}, Already pushed: ${alreadyPushed}, Remaining: ${remainingLimit}, Found: ${properties.length} properties`
-    );
+    totalToProcess = Math.min(foundCount, remainingLimit);
+    logger.info(`📊 Plan limit: ${settings.planLimit}, Remaining: ${remainingLimit}, Found: ${foundCount} properties. Will process: ${totalToProcess}`);
   }
 
-  if (!properties.length) {
-    logger.info("✔ Nothing to push");
+  if (totalToProcess === 0) {
+    logger.info("✔ No properties to process");
     return;
   }
+
+  const contactIdMap: Record<number, string> = {};
+  let pushedContactCount = 0;
+  let pushedPropertyCount = 0;
+  let associationCount = 0;
 
   logger.info(
     `🔍 Processing ${properties.length} properties for job ${job.id} (Pre-identified: ${isPreIdentified})`

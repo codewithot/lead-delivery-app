@@ -1,8 +1,7 @@
-
 import React from 'react';
 import Head from 'next/head';
-
 import Link from 'next/link';
+import { useSession, signOut } from 'next-auth/react';
 import { useRouter } from 'next/router';
 
 interface LayoutProps {
@@ -11,6 +10,7 @@ interface LayoutProps {
 }
 
 export default function Layout({ children, title = "ProEdge - Hands-Off Lead Delivery" }: LayoutProps) {
+    const { data: session, status } = useSession();
     const router = useRouter();
 
     const isActive = (path: string) => router.pathname === path;
@@ -38,26 +38,64 @@ export default function Layout({ children, title = "ProEdge - Hands-Off Lead Del
                             </Link>
                         </div>
 
-                        {/* Navigation */}
-                        <nav className="hidden md:flex space-x-8">
+                        <nav className="hidden md:flex space-x-6">
                             <NavLink href="/dashboard" active={isActive('/dashboard')}>Dashboard</NavLink>
                             <NavLink href="/settings" active={isActive('/settings')}>Settings</NavLink>
+                            {status === 'authenticated' && session?.user?.role === 'ADMIN' && (
+                                <NavLink href="/admin/failed-jobs" active={isActive('/admin/failed-jobs')}>
+                                    <span className="flex items-center gap-1.5 text-blue-400">
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                        Failed Jobs
+                                    </span>
+                                </NavLink>
+                            )}
                         </nav>
 
                         {/* Auth / Action */}
                         <div className="flex items-center space-x-4">
-                            <Link
-                                href="/auth/signin"
-                                className="text-sm font-medium text-gray-300 hover:text-white transition-colors"
-                            >
-                                Sign In
-                            </Link>
-                            <Link
-                                href="/dashboard"
-                                className="px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-all shadow-lg hover:shadow-blue-500/25"
-                            >
-                                Get Started
-                            </Link>
+                            {status === 'authenticated' ? (
+                                <>
+                                    <div className="hidden sm:flex items-center mr-4 gap-2">
+                                        {session.user?.role === 'ADMIN' && (
+                                            <span className="px-2 py-0.5 text-[10px] font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded uppercase tracking-wider">
+                                                Admin
+                                            </span>
+                                        )}
+                                        <span className="text-sm font-semibold text-white truncate max-w-[150px]">
+                                            {session.user?.name || session.user?.email}
+                                        </span>
+                                    </div>
+                                    <button
+                                        onClick={() => signOut({ callbackUrl: '/' })}
+                                        className="text-sm font-medium text-gray-300 hover:text-white transition-colors bg-white/5 hover:bg-white/10 px-4 py-2 rounded-xl border border-white/5 hover:border-white/10"
+                                    >
+                                        Logout
+                                    </button>
+                                    <Link
+                                        href="/dashboard"
+                                        className="px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-all shadow-lg hover:shadow-blue-500/25"
+                                    >
+                                        Dashboard
+                                    </Link>
+                                </>
+                            ) : (
+                                <>
+                                    <Link
+                                        href="/auth/signin"
+                                        className="text-sm font-medium text-gray-300 hover:text-white transition-colors"
+                                    >
+                                        Sign In
+                                    </Link>
+                                    <Link
+                                        href="/auth/signup"
+                                        className="px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-all shadow-lg hover:shadow-blue-500/25"
+                                    >
+                                        Get Started
+                                    </Link>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>

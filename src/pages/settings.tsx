@@ -5,6 +5,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { useRouter } from "next/router";
 import Layout from "../components/Layout";
+import { Toast } from "../components/Toast";
 
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const session = await getSession(ctx);
@@ -33,6 +34,7 @@ export default function SettingsPage() {
   const planLimit = 100; // Fixed value, no longer state
   const [selectedZips, setSelectedZips] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const { data: nearbyZips, error } = useSWR(
     zip ? `/api/zipcodes?zip=${zip}&radius=${radius}` : null,
@@ -73,10 +75,11 @@ export default function SettingsPage() {
     setIsSaving(false);
 
     if (res.ok) {
-      alert("✅ Settings saved!");
-      router.reload();
+      setToast({ message: "Settings saved successfully!", type: 'success' });
+      // Don't reload immediately, let the toast show
+      setTimeout(() => router.reload(), 1500);
     } else {
-      alert("❌ Failed to save settings.");
+      setToast({ message: "Failed to save settings.", type: 'error' });
     }
   };
 
@@ -214,6 +217,13 @@ export default function SettingsPage() {
           </form>
         </div>
       </div>
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
     </Layout>
   );
 }

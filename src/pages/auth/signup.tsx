@@ -43,8 +43,13 @@ export default function SignupPage() {
                 <title>Sign Up - ProEdge</title>
             </Head>
             <div className="max-w-md w-full space-y-8 glass-panel p-8 rounded-2xl border border-white/10 shadow-2xl">
-                <div>
-                    <h2 className="mt-2 text-center text-3xl font-extrabold text-white">
+                <div className="flex flex-col items-center">
+                    <Link href="/" className="mb-6 flex items-center gap-2 group transition-transform hover:scale-105">
+                        <span className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
+                            ProEdge
+                        </span>
+                    </Link>
+                    <h2 className="text-center text-3xl font-extrabold text-white">
                         Create your account
                     </h2>
                     <p className="mt-2 text-center text-sm text-gray-400">

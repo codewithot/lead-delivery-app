@@ -27,18 +27,23 @@ export default function Home() {
             and push high-quality leads directly into your GoHighLevel CRM.
           </p>
 
+          <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/5 border border-white/10 rounded-full text-xs font-medium text-gray-400">
+            <span className="flex h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
+            Join 50+ Real Estate Pros
+          </div>
+
           <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start pt-4">
             <Link
-              href="/auth/signin"
-              className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] hover:shadow-[0_0_30px_rgba(37,99,235,0.5)] transform hover:-translate-y-1"
+              href="/dashboard"
+              className="px-8 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold rounded-xl transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] hover:shadow-[0_0_30px_rgba(37,99,235,0.5)] transform hover:-translate-y-1"
             >
-              Connect with GoHighLevel
+              Get Started Now
             </Link>
             <Link
-              href="/dashboard"
+              href="/auth/signin"
               className="px-8 py-4 glass-panel hover:bg-white/10 text-white font-semibold rounded-xl transition-all border border-white/10 hover:border-white/20"
             >
-              View Dashboard
+              Sign In
             </Link>
           </div>
 
