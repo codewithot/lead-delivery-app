@@ -72,6 +72,7 @@ model Contact {
 
   @@index([emailNormalized])
   @@index([phoneNormalized])
+  @@index([pushed])
 }
 
 model ZipCode {
@@ -202,6 +203,7 @@ model Property {
   @@index([price])
   @@index([pushed])
   @@index([ownerId])
+  @@index([postalCode])
   @@index([postalCode, price, pushed])
   @@index([addressNormalized])
 }
@@ -222,6 +224,7 @@ model Job {
   User        User      @relation(fields: [userId], references: [id])
 
   @@index([status, attempts])
+  @@index([userId])
 }
 
 model WebhookLog {

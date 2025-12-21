@@ -83,23 +83,22 @@ export async function pushLeadsForUser(job) {
     logger.info(`🔑 Using OAuth token for user ${user.email || user.id}`);
     logger.info(`📍 Location ID: ${locationId}`);
     // ========================================================================
-    // STEP 2: Get properties - DUAL-MODE LOGIC WITH LIMIT CALCULATION
+    // STEP 2: Determine total to process and batching strategy
     // ========================================================================
-    const payload = job.payload; // ✅ Fixed type casting
-    let properties;
+    const payload = job.payload;
+    let preIdentifiedProps = [];
+    let totalToProcess = 0;
     let isPreIdentified = false;
-    // Check if this is daily queue mode (properties already identified)
     if (payload.properties &&
         Array.isArray(payload.properties) &&
         payload.properties.length > 0) {
-        logger.info(`📦 Using pre-identified properties from daily queue (${payload.properties.length} properties)`);
-        properties = payload.properties;
+        logger.info(`📦 Daily queue mode: ${payload.properties.length} properties provided`);
+        preIdentifiedProps = payload.properties;
+        totalToProcess = preIdentifiedProps.length;
         isPreIdentified = true;
     }
     else {
-        // Webhook mode - query database WITH REMAINING LIMIT
-        logger.info(`🔍 Fetching properties from database (webhook mode)`);
-        // ✅ Calculate remaining limit for today
+        logger.info(`🔍 Webhook mode: calculating limits and count`);
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
         const alreadyPushed = await prisma.property.count({
@@ -110,17 +109,15 @@ export async function pushLeadsForUser(job) {
                     lte: settings.priceMax ?? Number.MAX_SAFE_INTEGER,
                 },
                 postalCode: { in: settings.zipCodes },
-                pushedAt: {
-                    gte: todayStart,
-                },
+                pushedAt: { gte: todayStart },
             },
         });
         const remainingLimit = Math.max(0, settings.planLimit - alreadyPushed);
         if (remainingLimit === 0) {
-            logger.info("✔ Plan limit reached, nothing to push");
+            logger.info("✔ Plan limit reached for today, skipping");
             return;
         }
-        properties = await prisma.property.findMany({
+        const foundCount = await prisma.property.count({
             where: {
                 price: {
                     gte: settings.priceMin ?? 0,
@@ -129,20 +126,34 @@ export async function pushLeadsForUser(job) {
                 postalCode: { in: settings.zipCodes },
                 pushed: false,
             },
-            include: {
-                owner: true,
-            },
-            take: remainingLimit, // ✅ Use remaining limit instead of full planLimit
-            orderBy: {
-                createdAt: "asc", // ✅ FIFO - oldest properties first
-            },
         });
-        logger.info(`📊 Plan limit: ${settings.planLimit}, Already pushed: ${alreadyPushed}, Remaining: ${remainingLimit}, Found: ${properties.length} properties`);
+        totalToProcess = Math.min(foundCount, remainingLimit);
+        logger.info(`📊 Plan limit: ${settings.planLimit}, Remaining: ${remainingLimit}, Found: ${foundCount} properties. Will process: ${totalToProcess}`);
     }
-    if (!properties.length) {
-        logger.info("✔ Nothing to push");
+    if (totalToProcess === 0) {
+        logger.info("✔ No properties to process");
         return;
     }
+    const contactIdMap = {};
+    let pushedContactCount = 0;
+    let pushedPropertyCount = 0;
+    let associationCount = 0;
+    // ✅ FIX: Fetch properties in Webhook mode or use preIdentifiedProps in Daily Queue mode
+    const properties = isPreIdentified
+        ? preIdentifiedProps
+        : await prisma.property.findMany({
+            where: {
+                price: {
+                    gte: settings.priceMin ?? 0,
+                    lte: settings.priceMax ?? Number.MAX_SAFE_INTEGER,
+                },
+                postalCode: { in: settings.zipCodes },
+                pushed: false,
+            },
+            include: { owner: true },
+            take: totalToProcess,
+            orderBy: { createdAt: "asc" },
+        });
     logger.info(`🔍 Processing ${properties.length} properties for job ${job.id} (Pre-identified: ${isPreIdentified})`);
     // Initialize progress tracking
     await updateJobProgress(job.id, {
@@ -160,10 +171,7 @@ export async function pushLeadsForUser(job) {
         }
     }
     logger.info(`👥 Found ${contactsToPush.size} unique contacts to push`);
-    const contactIdMap = {};
-    let pushedContactCount = 0;
-    let pushedPropertyCount = 0;
-    let associationCount = 0;
+    // ✅ REMOVED: Lines 248-251 duplicate declarations deleted
     // ========================================================================
     // STEP 4: Push contacts first
     // ========================================================================
@@ -198,6 +206,7 @@ export async function pushLeadsForUser(job) {
             }
             continue; // Skip creation attempt
         }
+        // ✅ FIX Line 240: Added type annotation
         const property = properties.find((p) => p.ownerId === contactId);
         if (!property) {
             console.warn(`⚠️ Contact ID ${contactId} has no property in current batch, skipping`);

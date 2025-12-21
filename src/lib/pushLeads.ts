@@ -159,7 +159,6 @@ export async function pushLeadsForUser(job: Job) {
   // STEP 2: Determine total to process and batching strategy
   // ========================================================================
   const payload = job.payload as unknown as PushLeadsPayload;
-  const BATCH_SIZE = 50;
   let preIdentifiedProps: (Property & { owner: Contact | null })[] = [];
   let totalToProcess = 0;
   let isPreIdentified = false;
@@ -221,6 +220,23 @@ export async function pushLeadsForUser(job: Job) {
   let pushedPropertyCount = 0;
   let associationCount = 0;
 
+  // ✅ FIX: Fetch properties in Webhook mode or use preIdentifiedProps in Daily Queue mode
+  const properties: (Property & { owner: Contact | null })[] = isPreIdentified
+    ? preIdentifiedProps
+    : await prisma.property.findMany({
+      where: {
+        price: {
+          gte: settings.priceMin ?? 0,
+          lte: settings.priceMax ?? Number.MAX_SAFE_INTEGER,
+        },
+        postalCode: { in: settings.zipCodes },
+        pushed: false,
+      },
+      include: { owner: true },
+      take: totalToProcess,
+      orderBy: { createdAt: "asc" },
+    });
+
   logger.info(
     `🔍 Processing ${properties.length} properties for job ${job.id} (Pre-identified: ${isPreIdentified})`
   );
@@ -245,10 +261,7 @@ export async function pushLeadsForUser(job: Job) {
 
   logger.info(`👥 Found ${contactsToPush.size} unique contacts to push`);
 
-  const contactIdMap: Record<number, string> = {};
-  let pushedContactCount = 0;
-  let pushedPropertyCount = 0;
-  let associationCount = 0;
+  // ✅ REMOVED: Lines 248-251 duplicate declarations deleted
 
   // ========================================================================
   // STEP 4: Push contacts first
@@ -305,7 +318,8 @@ export async function pushLeadsForUser(job: Job) {
       continue; // Skip creation attempt
     }
 
-    const property = properties.find((p) => p.ownerId === contactId);
+    // ✅ FIX Line 240: Added type annotation
+    const property = properties.find((p: Property & { owner: Contact | null }) => p.ownerId === contactId);
 
     if (!property) {
       console.warn(

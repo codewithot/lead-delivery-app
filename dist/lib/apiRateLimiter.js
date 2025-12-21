@@ -1,11 +1,6 @@
 // src/lib/apiRateLimiter.ts
 import { RateLimiterMemory, RateLimiterRedis } from "rate-limiter-flexible";
 import Redis from "ioredis";
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-// RateLimitConfig interface removed as it was unused
-// ... existing code ...
 // Define rate limit tiers
 export const RATE_LIMIT_TIERS = {
     // Strictest - for webhooks and write operations
@@ -40,28 +35,38 @@ let redisClient = null;
 const rateLimiters = new Map();
 // Initialize Redis if available (for production)
 function getRedisClient() {
-    if (process.env.REDIS_URL && !redisClient) {
+    // Use REDIS_HOST or REDIS_URL as our indicators
+    if ((process.env.REDIS_HOST || process.env.REDIS_URL) && !redisClient) {
         try {
-            redisClient = new Redis(process.env.REDIS_URL, {
+            const redisOptions = {
+                host: process.env.REDIS_HOST || 'localhost',
+                port: parseInt(process.env.REDIS_PORT || '6379', 10),
                 enableOfflineQueue: false,
                 maxRetriesPerRequest: 1,
                 retryStrategy: (times) => {
-                    // Retry 3 times, then give up and fallback to memory
                     if (times > 3) {
-                        console.warn("⚠️ Redis connection failed 3 times, falling back to memory");
+                        console.warn("⚠️ Redis API limiter: Failed 3 attempts, falling back to memory");
                         return null;
                     }
-                    return Math.min(times * 50, 2000);
+                    return Math.min(times * 100, 2000);
                 },
-            });
+            };
+            if (process.env.REDIS_PASSWORD) {
+                redisOptions.password = process.env.REDIS_PASSWORD;
+            }
+            // Exact TLS configuration that worked in your test
+            if (process.env.REDIS_TLS === 'true') {
+                redisOptions.tls = { rejectUnauthorized: false };
+            }
+            console.log(`📡 Connecting Redis API limiter to ${redisOptions.host}...`);
+            redisClient = new Redis(redisOptions);
             redisClient.on("error", (err) => {
-                console.error("Redis rate limiter error:", err);
-                redisClient = null;
+                console.error("❌ Redis API rate limiter error:", err.message);
             });
-            console.log("✅ Redis rate limiter connected");
+            console.log("✅ Redis API rate limiter connected");
         }
-        catch {
-            console.warn("⚠️ Redis not available, using in-memory rate limiter");
+        catch (err) {
+            console.warn("⚠️ Redis host config invalid, using in-memory rate limiter", err);
             redisClient = null;
         }
     }
