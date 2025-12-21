@@ -220,10 +220,26 @@ export async function pushLeadsForUser(job: Job) {
   let pushedPropertyCount = 0;
   let associationCount = 0;
 
-  // ✅ FIX: Fetch properties in Webhook mode or use preIdentifiedProps in Daily Queue mode
-  const properties: (Property & { owner: Contact | null })[] = isPreIdentified
-    ? preIdentifiedProps
-    : await prisma.property.findMany({
+  // ========================================================================
+  // STEP 3: Identify unique contacts and process them
+  // ========================================================================
+  let propertyIdsToProcess: number[] = [];
+  const contactsToPush = new Map<number, Contact>();
+  const contactToPropertyIdMap = new Map<number, number>();
+
+  if (isPreIdentified) {
+    propertyIdsToProcess = preIdentifiedProps.map(p => p.id);
+    for (const p of preIdentifiedProps) {
+      if (p.owner && !p.owner.pushed && p.ownerId) {
+        contactsToPush.set(p.ownerId, p.owner);
+        if (!contactToPropertyIdMap.has(p.ownerId)) {
+          contactToPropertyIdMap.set(p.ownerId, p.id);
+        }
+      }
+    }
+  } else {
+    // 🟠 OPTIMIZATION: Fetch ONLY IDs first to keep memory low
+    const propRows = await prisma.property.findMany({
       where: {
         price: {
           gte: settings.priceMin ?? 0,
@@ -232,32 +248,63 @@ export async function pushLeadsForUser(job: Job) {
         postalCode: { in: settings.zipCodes },
         pushed: false,
       },
-      include: { owner: true },
+      select: { id: true, ownerId: true },
       take: totalToProcess,
       orderBy: { createdAt: "asc" },
     });
 
+    propertyIdsToProcess = propRows.map(p => p.id);
+
+    // Identify unique owner IDs that aren't pushed and map them to a property
+    for (const row of propRows) {
+      if (row.ownerId && !contactToPropertyIdMap.has(row.ownerId)) {
+        contactToPropertyIdMap.set(row.ownerId, row.id);
+      }
+    }
+
+    const uniqueOwnerIds = Array.from(contactToPropertyIdMap.keys());
+
+    if (uniqueOwnerIds.length > 0) {
+      const owners = await prisma.contact.findMany({
+        where: {
+          id: { in: uniqueOwnerIds },
+          pushed: false
+        }
+      });
+      for (const owner of owners) {
+        contactsToPush.set(owner.id, owner);
+      }
+    }
+  }
+
+  // Fetch only one property per contact for contact creation metadata
+  const contactPropertiesMap = new Map<number, Property>();
+  const propertyIdsForContacts = Array.from(contactToPropertyIdMap.values());
+
+  if (propertyIdsForContacts.length > 0) {
+    const contactProps = await prisma.property.findMany({
+      where: { id: { in: propertyIdsForContacts } }
+    });
+    for (const prop of contactProps) {
+      // Find which contact this property belongs to
+      for (const [contactId, propId] of contactToPropertyIdMap.entries()) {
+        if (propId === prop.id) {
+          contactPropertiesMap.set(contactId, prop);
+        }
+      }
+    }
+  }
+
   logger.info(
-    `🔍 Processing ${properties.length} properties for job ${job.id} (Pre-identified: ${isPreIdentified})`
+    `🔍 Identified ${propertyIdsToProcess.length} properties and ${contactsToPush.size} unique contacts to push`
   );
 
   // Initialize progress tracking
   await updateJobProgress(job.id, {
     processed: 0,
-    total: properties.length,
-    status: `Found ${properties.length} properties to push`,
+    total: propertyIdsToProcess.length + contactsToPush.size,
+    status: `Starting push for ${propertyIdsToProcess.length} properties`,
   }).catch((err) => console.warn("Progress update failed:", err));
-
-  // ========================================================================
-  // STEP 3: Identify unique contacts that need to be pushed
-  // ========================================================================
-  const contactsToPush = new Map<number, (typeof properties)[0]["owner"]>();
-
-  for (const property of properties) {
-    if (property.owner && !property.owner.pushed && property.ownerId) {
-      contactsToPush.set(property.ownerId, property.owner);
-    }
-  }
 
   logger.info(`👥 Found ${contactsToPush.size} unique contacts to push`);
 
@@ -318,12 +365,12 @@ export async function pushLeadsForUser(job: Job) {
       continue; // Skip creation attempt
     }
 
-    // ✅ FIX Line 240: Added type annotation
-    const property = properties.find((p: Property & { owner: Contact | null }) => p.ownerId === contactId);
+    // ✅ Optimized: Use pre-fetched property data
+    const property = contactPropertiesMap.get(contactId);
 
     if (!property) {
       console.warn(
-        `⚠️ Contact ID ${contactId} has no property in current batch, skipping`
+        `⚠️ Contact ID ${contactId} has no associated property data, skipping`
       );
       continue;
     }
@@ -610,7 +657,7 @@ export async function pushLeadsForUser(job: Job) {
         pushedContactCount++;
         await updateJobProgress(job.id, {
           processed: pushedContactCount,
-          total: contactsToPush.size + properties.length,
+          total: contactsToPush.size + propertyIdsToProcess.length,
           status: `Pushed ${pushedContactCount}/${contactsToPush.size} contacts`,
         }).catch((err) => console.warn("Progress update failed:", err));
       } else {
@@ -647,334 +694,357 @@ export async function pushLeadsForUser(job: Job) {
   );
 
   // ========================================================================
-  // STEP 5: Push properties and create associations
+  // STEP 5: Push properties and create associations in batches
   // ========================================================================
-  for (const p of properties) {
-    // ✅ NEW: Check local database first
-    const localProperty = await findLocalProperty(p.addressFull);
+  const PUSH_BATCH_SIZE = 50;
 
-    if (localProperty?.ghlPropertyId) {
-      logger.info(
-        `✅ Found existing property in local DB: ${localProperty.ghlPropertyId}`
-      );
+  for (let i = 0; i < propertyIdsToProcess.length; i += PUSH_BATCH_SIZE) {
+    const batchIds = propertyIdsToProcess.slice(i, i + PUSH_BATCH_SIZE);
 
-      // Mark as pushed if not already
-      if (!p.pushed) {
-        await prisma.property.update({
-          where: { id: p.id },
-          data: {
-            pushed: true,
-            pushedAt: new Date(),
-            ghlPropertyId: localProperty.ghlPropertyId,
-          },
-        });
-      }
+    // 🟠 FETCH BATCH: Load only what we need for this chunk
+    let batch: (Property & { owner?: Contact | null })[] = [];
 
-      // Still need to create association
-      let ghlContactId: string | undefined = contactIdMap[p.ownerId!];
-
-      if (!ghlContactId && p.ownerId) {
-        const owner = await prisma.contact.findUnique({
-          where: { id: p.ownerId },
-          select: { email: true, phone: true, ghlContactId: true },
-        });
-
-        if (owner?.ghlContactId) {
-          ghlContactId = owner.ghlContactId;
-        } else if (owner) {
-          ghlContactId = await rateLimitedRequest(() =>
-            findGhlContactByEmailOrPhone(
-              owner.email,
-              owner.phone,
-              accessToken,
-              locationId
-            )
-          );
-        }
-      }
-
-      if (ghlContactId && localProperty.ghlPropertyId) {
-        logger.info(
-          `🔗 Associating existing property ${p.id} with contact ${p.ownerId}`
-        );
-        await rateLimitedRequest(() =>
-          ensureContactPropertyAssociation(
-            ghlContactId,
-            localProperty.ghlPropertyId!,
-            accessToken,
-            locationId
-          )
-        );
-        associationCount++;
-      }
-
-      continue; // Skip GHL property creation
-    }
-
-    const existingGhlId = await rateLimitedRequest(() =>
-      findGhlPropertyByAddress(p.addressFull, accessToken, locationId)
-    );
-
-    if (existingGhlId) {
-      logger.info(`Found existing property in GHL: ${existingGhlId}`);
-
-      // Mark as pushed with timestamp if not already marked
-      if (!p.pushed) {
-        await prisma.property.update({
-          where: { id: p.id },
-          data: {
-            pushed: true,
-            pushedAt: new Date(),
-            ghlPropertyId: existingGhlId,
-          },
-        });
-      }
-
-      let ghlContactId: string | undefined = contactIdMap[p.ownerId!];
-
-      if (!ghlContactId && p.ownerId) {
-        const owner = await prisma.contact.findUnique({
-          where: { id: p.ownerId },
-          select: { email: true, phone: true, ghlContactId: true },
-        });
-
-        if (owner) {
-          ghlContactId = await rateLimitedRequest(() =>
-            findGhlContactByEmailOrPhone(
-              owner.email,
-              owner.phone,
-              accessToken,
-              locationId
-            )
-          );
-        }
-      }
-
-      if (ghlContactId && existingGhlId) {
-        logger.info(
-          `🔗 Associating existing property ${p.id} (GHL: ${existingGhlId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`
-        );
-        await rateLimitedRequest(() =>
-          ensureContactPropertyAssociation(
-            ghlContactId,
-            existingGhlId,
-            accessToken,
-            locationId
-          )
-        );
-        associationCount++;
-      }
-      continue; // Skip creation
-    }
-
-    if (!p.ownerId) {
-      console.warn(`⚠️ Property ID ${p.id} has no ownerId, skipping`);
-      continue;
-    }
-
-    // Try to get GHL contact ID from our map first
-    let ghlContactId: string | undefined = contactIdMap[p.ownerId];
-
-    // If not in map, try to find it again (fallback)
-    if (!ghlContactId) {
-      const owner = await prisma.contact.findUnique({
-        where: { id: p.ownerId },
-        select: { email: true, phone: true, ghlContactId: true },
+    if (isPreIdentified) {
+      batch = preIdentifiedProps.slice(i, i + PUSH_BATCH_SIZE);
+    } else {
+      batch = await prisma.property.findMany({
+        where: { id: { in: batchIds } },
+        include: { owner: true }
       });
+    }
 
-      if (owner) {
-        ghlContactId = await rateLimitedRequest(() =>
-          findGhlContactByEmailOrPhone(
-            owner.email,
-            owner.phone,
-            accessToken,
-            locationId
+    logger.info(`📦 Processing property batch ${Math.floor(i / PUSH_BATCH_SIZE) + 1} (${batch.length} properties)`);
+
+    for (const p of batch) {
+      try {
+        // ✅ NEW: Check local database first
+        const localProperty = await findLocalProperty(p.addressFull);
+
+        if (localProperty?.ghlPropertyId) {
+          logger.info(
+            `✅ Found existing property in local DB: ${localProperty.ghlPropertyId}`
+          );
+
+          // Mark as pushed if not already
+          if (!p.pushed) {
+            await prisma.property.update({
+              where: { id: p.id },
+              data: {
+                pushed: true,
+                pushedAt: new Date(),
+                ghlPropertyId: localProperty.ghlPropertyId,
+              },
+            });
+          }
+
+          // Still need to create association
+          let ghlContactId: string | undefined = contactIdMap[p.ownerId!];
+
+          if (!ghlContactId && p.ownerId) {
+            const owner = await prisma.contact.findUnique({
+              where: { id: p.ownerId },
+              select: { email: true, phone: true, ghlContactId: true },
+            });
+
+            if (owner?.ghlContactId) {
+              ghlContactId = owner.ghlContactId;
+            } else if (owner) {
+              ghlContactId = await rateLimitedRequest(() =>
+                findGhlContactByEmailOrPhone(
+                  owner.email,
+                  owner.phone,
+                  accessToken,
+                  locationId
+                )
+              );
+            }
+          }
+
+          if (ghlContactId && localProperty.ghlPropertyId) {
+            logger.info(
+              `🔗 Associating existing property ${p.id} with contact ${p.ownerId}`
+            );
+            await rateLimitedRequest(() =>
+              ensureContactPropertyAssociation(
+                ghlContactId,
+                localProperty.ghlPropertyId!,
+                accessToken,
+                locationId
+              )
+            );
+            associationCount++;
+          }
+
+          continue; // Skip GHL property creation
+        }
+
+        const existingGhlId = await rateLimitedRequest(() =>
+          findGhlPropertyByAddress(p.addressFull, accessToken, locationId)
+        );
+
+        if (existingGhlId) {
+          logger.info(`Found existing property in GHL: ${existingGhlId}`);
+
+          // Mark as pushed with timestamp if not already marked
+          if (!p.pushed) {
+            await prisma.property.update({
+              where: { id: p.id },
+              data: {
+                pushed: true,
+                pushedAt: new Date(),
+                ghlPropertyId: existingGhlId,
+              },
+            });
+          }
+
+          let ghlContactId: string | undefined = contactIdMap[p.ownerId!];
+
+          if (!ghlContactId && p.ownerId) {
+            const owner = await prisma.contact.findUnique({
+              where: { id: p.ownerId },
+              select: { email: true, phone: true, ghlContactId: true },
+            });
+
+            if (owner) {
+              ghlContactId = await rateLimitedRequest(() =>
+                findGhlContactByEmailOrPhone(
+                  owner.email,
+                  owner.phone,
+                  accessToken,
+                  locationId
+                )
+              );
+            }
+          }
+
+          if (ghlContactId && existingGhlId) {
+            logger.info(
+              `🔗 Associating existing property ${p.id} (GHL: ${existingGhlId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`
+            );
+            await rateLimitedRequest(() =>
+              ensureContactPropertyAssociation(
+                ghlContactId,
+                existingGhlId,
+                accessToken,
+                locationId
+              )
+            );
+            associationCount++;
+          }
+          continue; // Skip creation
+        }
+
+        if (!p.ownerId) {
+          console.warn(`⚠️ Property ID ${p.id} has no ownerId, skipping`);
+          continue;
+        }
+
+        // Try to get GHL contact ID from our map first
+        let ghlContactId: string | undefined = contactIdMap[p.ownerId];
+
+        // If not in map, try to find it again (fallback)
+        if (!ghlContactId) {
+          const owner = await prisma.contact.findUnique({
+            where: { id: p.ownerId },
+            select: { email: true, phone: true, ghlContactId: true },
+          });
+
+          if (owner) {
+            ghlContactId = await rateLimitedRequest(() =>
+              findGhlContactByEmailOrPhone(
+                owner.email,
+                owner.phone,
+                accessToken,
+                locationId
+              )
+            );
+          }
+        }
+
+        if (!ghlContactId) {
+          console.warn(
+            `⚠️ Property ID ${p.id} owner (${p.ownerId}) wasn't pushed successfully, skipping property`
+          );
+          continue;
+        }
+
+        const customFields: Record<string, unknown> = {};
+        const loanTypeKey = normalizeLoanType(p.loanType);
+
+        const fieldMappings = {
+          city: p.city,
+          state: p.state,
+          zippostal: p.postalCode,
+          beds: p.bedrooms,
+          baths: p.bathrooms,
+          sq_feet: p.aboveGradeFinishedSqft,
+          free_and_clear: p.freeAndClear,
+          equity_: toNumber(p.equity),
+          year_built: toNumber(p.yearBuilt),
+          property_type: normalizePropertyType(p.propertyType),
+          seller_motivation: p.sellerMotivation,
+          in_preforclosure: normalizeYesNo(p.inPreforclosure),
+          home_condition: p.homeCondition,
+          owner_occupied: normalizeYesNo(p.ownerOccupied),
+          loan_type: loanTypeKey ?? "",
+        };
+
+        if (p.estimatedEquity) {
+          const val = toFloat(p.estimatedEquity);
+          if (val !== null) {
+            customFields["estimated_equity"] = {
+              currency: "default",
+              value: val,
+            };
+          }
+        }
+
+        if (p.estimatedMtgBalance) {
+          const val = toNumber(p.estimatedMtgBalance);
+          if (val !== null) {
+            customFields["estimated_mtg_balance"] = {
+              currency: "default",
+              value: val,
+            };
+          }
+        }
+
+        if (p.resaleValueArv) {
+          const val = toNumber(p.resaleValueArv);
+          if (val !== null) {
+            customFields["resale_value_arv"] = {
+              currency: "default",
+              value: val,
+            };
+          }
+        }
+
+        if (p.askingPrice) {
+          const val = toNumber(p.askingPrice);
+          if (val !== null) {
+            customFields["asking_price"] = { currency: "default", value: val };
+          }
+        }
+
+        for (const [key, val] of Object.entries(fieldMappings)) {
+          if (val !== null && val !== undefined && val !== "") {
+            customFields[key] = val;
+          }
+        }
+
+        const payload = {
+          properties: {
+            address: p.addressFull,
+            ...customFields,
+          },
+          locationId: locationId,
+        };
+
+        console.debug(
+          `📦 Prepared payload for property ID ${p.id}:`,
+          JSON.stringify(payload, null, 2)
+        );
+
+        // RATE-LIMITED REQUEST
+        const resp = await rateLimitedRequest(() =>
+          axios.post(
+            `${GHL_BASE_URL}/objects/${CUSTOM_OBJECT_KEY}/records`,
+            payload,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: "application/json",
+                "Content-Type": "application/json",
+                Version: API_VERSION,
+              },
+            }
           )
         );
-      }
-    }
 
-    if (!ghlContactId) {
-      console.warn(
-        `⚠️ Property ID ${p.id} owner (${p.ownerId}) wasn't pushed successfully, skipping property`
-      );
-      continue;
-    }
+        if (resp.status === 201 || resp.status === 200) {
+          const ghlPropertyId = extractGhlId(resp.data);
 
-    const customFields: Record<string, unknown> = {};
-    const loanTypeKey = normalizeLoanType(p.loanType);
-
-    const fieldMappings = {
-      city: p.city,
-      state: p.state,
-      zippostal: p.postalCode,
-      beds: p.bedrooms,
-      baths: p.bathrooms,
-      sq_feet: p.aboveGradeFinishedSqft,
-      free_and_clear: p.freeAndClear,
-      equity_: toNumber(p.equity),
-      year_built: toNumber(p.yearBuilt),
-      property_type: normalizePropertyType(p.propertyType),
-      seller_motivation: p.sellerMotivation,
-      in_preforclosure: normalizeYesNo(p.inPreforclosure),
-      home_condition: p.homeCondition,
-      owner_occupied: normalizeYesNo(p.ownerOccupied),
-      loan_type: loanTypeKey ?? "",
-    };
-
-    if (p.estimatedEquity) {
-      const val = toFloat(p.estimatedEquity);
-      if (val !== null) {
-        customFields["estimated_equity"] = {
-          currency: "default",
-          value: val,
-        };
-      }
-    }
-
-    if (p.estimatedMtgBalance) {
-      const val = toNumber(p.estimatedMtgBalance);
-      if (val !== null) {
-        customFields["estimated_mtg_balance"] = {
-          currency: "default",
-          value: val,
-        };
-      }
-    }
-
-    if (p.resaleValueArv) {
-      const val = toNumber(p.resaleValueArv);
-      if (val !== null) {
-        customFields["resale_value_arv"] = {
-          currency: "default",
-          value: val,
-        };
-      }
-    }
-
-    if (p.askingPrice) {
-      const val = toNumber(p.askingPrice);
-      if (val !== null) {
-        customFields["asking_price"] = { currency: "default", value: val };
-      }
-    }
-
-    for (const [key, val] of Object.entries(fieldMappings)) {
-      if (val !== null && val !== undefined && val !== "") {
-        customFields[key] = val;
-      }
-    }
-
-    const payload = {
-      properties: {
-        address: p.addressFull,
-        ...customFields,
-      },
-      locationId: locationId,
-    };
-
-    console.debug(
-      `📦 Prepared payload for property ID ${p.id}:`,
-      JSON.stringify(payload, null, 2)
-    );
-
-    try {
-      // RATE-LIMITED REQUEST
-      const resp = await rateLimitedRequest(() =>
-        axios.post(
-          `${GHL_BASE_URL}/objects/${CUSTOM_OBJECT_KEY}/records`,
-          payload,
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              Accept: "application/json",
-              "Content-Type": "application/json",
-              Version: API_VERSION,
-            },
+          if (ghlPropertyId) {
+            await prisma.property.update({
+              where: { id: p.id },
+              data: {
+                pushed: true,
+                pushedAt: new Date(), // ✅ Track when pushed
+                ghlPropertyId,
+              },
+            });
           }
-        )
-      );
 
-      if (resp.status === 201 || resp.status === 200) {
-        const ghlPropertyId = extractGhlId(resp.data);
+          if (!ghlPropertyId) {
+            console.warn(
+              `⚠️ Created property ${p.id} but could not find GHL id in response.`
+            );
+            console.debug("Full resp.data:", JSON.stringify(resp.data, null, 2));
+          }
 
-        if (ghlPropertyId) {
-          await prisma.property.update({
-            where: { id: p.id },
-            data: {
-              pushed: true,
-              pushedAt: new Date(), // ✅ Track when pushed
-              ghlPropertyId,
-            },
-          });
-        }
+          pushedPropertyCount++;
+          logger.info(`✔ Pushed property ID ${p.id} (GHL: ${ghlPropertyId})`);
 
-        if (!ghlPropertyId) {
-          console.warn(
-            `⚠️ Created property ${p.id} but could not find GHL id in response.`
-          );
-          console.debug("Full resp.data:", JSON.stringify(resp.data, null, 2));
-        }
+          await updateJobProgress(job.id, {
+            processed: contactsToPush.size + pushedPropertyCount,
+            total: contactsToPush.size + propertyIdsToProcess.length,
+            status: `Pushed ${pushedPropertyCount}/${propertyIdsToProcess.length} properties`,
+          }).catch((err) => console.warn("Progress update failed:", err));
 
-        pushedPropertyCount++;
-        logger.info(`✔ Pushed property ID ${p.id} (GHL: ${ghlPropertyId})`);
-
-        await updateJobProgress(job.id, {
-          processed: contactsToPush.size + pushedPropertyCount,
-          total: contactsToPush.size + properties.length,
-          status: `Pushed ${pushedPropertyCount}/${properties.length} properties`,
-        }).catch((err) => console.warn("Progress update failed:", err));
-
-        // Create association
-        if (ghlPropertyId && ghlContactId) {
-          logger.info(
-            `🔗 Associating property ${p.id} (GHL: ${ghlPropertyId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`
-          );
-          await rateLimitedRequest(() =>
-            ensureContactPropertyAssociation(
-              ghlContactId,
-              ghlPropertyId,
-              accessToken,
-              locationId
+          // Create association
+          if (ghlPropertyId && ghlContactId) {
+            logger.info(
+              `🔗 Associating property ${p.id} (GHL: ${ghlPropertyId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`
+            );
+            await rateLimitedRequest(() =>
+              ensureContactPropertyAssociation(
+                ghlContactId,
+                ghlPropertyId,
+                accessToken,
+                locationId
+              )
             )
-          );
-          associationCount++;
-        } else {
-          console.warn(
-            `⚠️ Skipping association for property ${p.id}: missing GHL IDs`
-          );
-        }
-      } else {
-        console.error(
-          `✖ GHL responded ${resp.status} ${resp.statusText} for property ${p.id}`
-        );
-      }
-    } catch (err: unknown) {
-      if (axios.isAxiosError(err)) {
-        if (err.response) {
-          console.error(`❌ GHL Error for property ID ${p.id}:`, {
-            status: err.response.status,
-            data: err.response.data,
-            headers: err.response.headers,
-          });
+            associationCount++;
+          } else {
+            console.warn(
+              `⚠️ Skipping association for property ${p.id}: missing GHL IDs`
+            );
+          }
         } else {
           console.error(
-            `❌ Network error for property ID ${p.id}:`,
-            err.message
+            `✖ GHL responded ${resp.status} ${resp.statusText} for property ${p.id}`
           );
         }
-      } else {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        console.error(`❌ Error pushing property ID ${p.id}:`, errorMessage);
+      } catch (err: unknown) {
+        if (axios.isAxiosError(err)) {
+          if (err.response) {
+            console.error(`❌ GHL Error for property ID ${p.id}:`, {
+              status: err.response.status,
+              data: err.response.data,
+              headers: err.response.headers,
+            });
+          } else {
+            console.error(
+              `❌ Network error for property ID ${p.id}:`,
+              err.message
+            );
+          }
+        } else {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          console.error(`❌ Error pushing property ID ${p.id}:`, errorMessage);
+        }
       }
     }
+
+    // Explicitly yield to give GC a chance if needed
+    await new Promise(resolve => setTimeout(resolve, 0));
   }
 
   logger.info(`
 ========================================
 ✅ Job ${job.id} COMPLETE
 ========================================
-📊 Properties pushed: ${pushedPropertyCount}/${properties.length}
+📊 Properties pushed: ${pushedPropertyCount}/${propertyIdsToProcess.length}
 👥 Contacts pushed: ${pushedContactCount}/${contactsToPush.size}
 🔗 Associations created: ${associationCount}
 🔑 OAuth token used for: ${user.email || user.id}
