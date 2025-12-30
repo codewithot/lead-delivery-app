@@ -6,6 +6,9 @@ import { PrismaClient } from "@prisma/client";
 import { getQueueInstance } from "@/lib/queue";
 import { withRateLimit } from "@/lib/apiRateLimiter";
 import { isAdmin } from "@/lib/adminGuard";
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('JobsRetry');
 
 const prisma = new PrismaClient();
 
@@ -77,7 +80,7 @@ async function handler(
       expireInSeconds: 3600,
     });
 
-    console.log(`✅ Job ${id} retried successfully. New job ID: ${newJobId}`);
+    logger.info(`✅ Job ${id} retried successfully`, { newJobId });
 
     return res.status(200).json({
       success: true,
@@ -86,7 +89,7 @@ async function handler(
       newJobId,
     });
   } catch (error) {
-    console.error("Error retrying job:", error);
+    logger.error("Error retrying job", { error });
     return res.status(500).json({
       error: "Internal server error",
       message: error instanceof Error ? error.message : "Unknown error",

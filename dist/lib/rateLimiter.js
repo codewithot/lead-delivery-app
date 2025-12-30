@@ -45,7 +45,7 @@ function createRateLimiter() {
                 reservoirRefreshAmount: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
                 reservoirRefreshInterval: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
                 // Timeout settings
-                timeout: 30000, // 30 second timeout for queued jobs
+                timeout: parseInt(process.env.TIMEOUT || "30000"), // 30 second timeout for queued jobs
             });
             console.log('✅ Redis-backed rate limiter created successfully');
             return limiter;

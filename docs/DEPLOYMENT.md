@@ -1,141 +1,101 @@
 # Deployment Guide
 
-## Memory Configuration
+This document provides instructions for deploying the Lead Delivery App to a production environment.
 
-The application is configured with the following memory limits to prevent OOM (Out of Memory) errors:
+## 1. Prerequisites
 
-### Worker Processes
-- **Memory Limit**: 768 MB (`--max-old-space-size=768`)
-- **Max Memory Restart**: 800 MB (PM2 auto-restart threshold)
-- **Garbage Collection**: Exposed via `--expose-gc` flag
+- **Node.js**: v18 or higher (using ESM)
+- **PostgreSQL**: v14 or higher
+- **Redis**: For API rate limiting (can fallback to in-memory)
+- **PM2**: For process management
 
-### Next.js Application
-- **Memory Limit**: 512 MB
-- **Max Memory Restart**: 600 MB
+## 2. Environment Setup
 
-## Running Workers
+Create a `.env.production` file in the root directory. See [ENV_VARS.md](./ENV_VARS.md) for a complete reference.
 
-### Development
 ```bash
-# Run workers with memory limits (TypeScript)
-npm run workers
+DATABASE_URL="postgresql://user:pass@host:5432/dbname"
+NEXTAUTH_SECRET="your-secret"
+NEXTAUTH_URL="https://your-app-url.com"
+GHL_CLIENT_ID="ghl-client-id"
+GHL_CLIENT_SECRET="ghl-client-secret"
+WEBHOOK_SECRET="webhook-secret"
 ```
 
-### Production
-```bash
-# Build workers first
-npm run build:workers
+## 3. Build the Application
 
-# Run compiled workers with memory limits
-npm run worker:prod
+The application requires building both the Next.js frontend/API and the worker processes.
+
+```bash
+# Install dependencies
+npm install
+
+# Build Next.js and Workers
+npm run build
 ```
 
-### Using PM2 (Recommended for Production)
-```bash
-# Install PM2 globally
-npm install -g pm2
+The `npm run build` command executes:
+1. `next build`
+2. `tsc -p tsconfig.workers.json` (Compiles TS workers to `dist/`)
 
-# Start all services
+## 4. Production Execution (PM2)
+
+The recommended way to run the application in production is using **PM2**. We provide an `ecosystem.config.js` file pre-configured with memory limits and monitoring.
+
+### pm2 ecosystem.config.js
+```javascript
+module.exports = {
+  apps: [
+    {
+      name: "lead-workers",
+      script: "dist/workers/master.js",
+      instances: 1,
+      exec_mode: "fork",
+      node_args: "--max-old-space-size=768 --expose-gc",
+      autorestart: true,
+      max_memory_restart: "800M",
+      env: {
+        NODE_ENV: "production",
+        WORKER_COUNT: "10",
+        JOB_CONCURRENCY: "10",
+      }
+    },
+    {
+      name: "nextjs-app",
+      script: "node_modules/next/dist/bin/next",
+      args: "start",
+      instances: 1,
+      exec_mode: "fork",
+      node_args: "--max-old-space-size=512",
+      env: {
+        NODE_ENV: "production",
+        PORT: "3000",
+      }
+    }
+  ]
+};
+```
+
+### Start Services
+```bash
 pm2 start ecosystem.config.js
-
-# Monitor processes
-pm2 monit
-
-# View logs
-pm2 logs lead-workers
-
-# Restart workers
-pm2 restart lead-workers
-
-# Stop all
-pm2 stop all
-
-# Save PM2 configuration
-pm2 save
-
-# Setup PM2 to start on system boot
-pm2 startup
 ```
 
-## Monitoring Memory Usage
+## 5. Memory Configuration
 
-The application includes built-in memory monitoring:
-```typescript
-// Logs memory every 30 seconds
-setupMemoryMonitoring(workerId, 30000);
-```
+To prevent OOM errors, the processes are constrained using the following flags:
 
-### Memory Logs Show:
-- **RSS** (Resident Set Size): Total memory allocated
-- **Heap Total**: Total heap size
-- **Heap Used**: Currently used heap
-- **External**: C++ objects bound to JavaScript
+- **Lead Workers**: `--max-old-space-size=768`
+- **Next.js App**: `--max-old-space-size=512`
 
-### Automatic Garbage Collection
-When heap usage exceeds 300 MB, the system triggers manual GC (if `--expose-gc` is enabled).
+PM2 is also configured with `max_memory_restart` to auto-recycle processes that exceed safe thresholds.
 
-## Environment Variables
-```bash
-# Worker configuration
-WORKER_COUNT=10                 # Number of concurrent workers
-JOB_CONCURRENCY=10             # Jobs per worker
-REGION_TZ=America/New_York     # Timezone for scheduling
+## 6. Logging
 
-# Memory monitoring
-MEMORY_ALERT_THRESHOLD=600     # Alert when RSS exceeds (MB)
+Logs are written to the `./logs` directory as defined in the ecosystem configuration:
+- `logs/workers-error.log`
+- `logs/nextjs-error.log`
 
-# Database
-DATABASE_URL=postgresql://...
-JOB_PG_POOL_MAX=10            # Database connection pool size
-```
+---
 
-## Troubleshooting
-
-### Out of Memory Errors
-If you see `FATAL ERROR: Reached heap limit`:
-1. Check current memory limits: `node --v8-options | grep max-old-space-size`
-2. Increase `--max-old-space-size` if needed (current: 768 MB)
-3. Review `max_memory_restart` in PM2 config
-
-### High Memory Usage
-1. Check PM2 dashboard: `pm2 monit`
-2. View detailed memory: `pm2 show lead-workers`
-3. Restart if needed: `pm2 restart lead-workers`
-
-### Memory Leaks
-1. Enable heap snapshots in PM2:
-```bash
-   pm2 install pm2-heapdump
-   pm2 heapdump lead-workers
-```
-2. Analyze with Chrome DevTools
-
-## Manual Queue Provisioning
-```bash
-# Trigger manual queue provision
-npm run provision-queues
-```
-
-## Scheduled Provisioning
-
-Workers automatically provision daily queues at:
-- **06:00 EST** - Main provision
-- **06:10 EST** - Retry #1
-- **06:20 EST** - Retry #2
-
-No additional cron setup needed - the scheduler runs inside the worker process.
-```
-
-## 6. Create `.gitignore` entry for logs
-
-Add to your `.gitignore`:
-```
-# Logs
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# PM2
-.pm2/
+For troubleshooting common issues, refer to the [Troubleshooting Guide](./TROUBLESHOOTING.md).

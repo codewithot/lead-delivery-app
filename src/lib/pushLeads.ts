@@ -128,8 +128,13 @@ async function findLocalProperty(
 
   return property;
 }
-export async function pushLeadsForUser(job: Job) {
-  logger.info(`▶ Starting job id=${job.id}, userId=${job.userId}`);
+export async function pushLeadsForUser(job: Job, correlationId?: string) {
+  // Create scoped logger with correlation ID for distributed tracing
+  const scopedLogger = correlationId
+    ? createLogger('PushLeads').withCorrelationId(correlationId)
+    : logger;
+
+  scopedLogger.info('Starting job', { jobId: job.id, userId: job.userId });
   console.debug(`Payload: ${JSON.stringify(job.payload)}`);
 
   // ========================================================================
@@ -148,12 +153,12 @@ export async function pushLeadsForUser(job: Job) {
     throw new Error("User has no GHL locationId configured");
   }
 
-  const accessToken = await getValidAccessToken(user);
+  const accessToken = await getValidAccessToken(user, correlationId);
   const locationId = user.locationId;
   const settings = user.settings as UserSettings;
 
-  logger.info(`🔑 Using OAuth token for user ${user.email || user.id}`);
-  logger.info(`📍 Location ID: ${locationId}`);
+  scopedLogger.info('Using OAuth token', { userId: user.email || user.id });
+  scopedLogger.info('Location ID configured', { locationId });
 
   // ========================================================================
   // STEP 2: Determine total to process and batching strategy
@@ -168,12 +173,12 @@ export async function pushLeadsForUser(job: Job) {
     Array.isArray(payload.properties) &&
     payload.properties.length > 0
   ) {
-    logger.info(`📦 Daily queue mode: ${payload.properties.length} properties provided`);
+    scopedLogger.info('Daily queue mode', { propertyCount: payload.properties.length });
     preIdentifiedProps = payload.properties;
     totalToProcess = preIdentifiedProps.length;
     isPreIdentified = true;
   } else {
-    logger.info(`🔍 Webhook mode: calculating limits and count`);
+    scopedLogger.info('Webhook mode: calculating limits and count');
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
@@ -191,7 +196,7 @@ export async function pushLeadsForUser(job: Job) {
 
     const remainingLimit = Math.max(0, settings.planLimit - alreadyPushed);
     if (remainingLimit === 0) {
-      logger.info("✔ Plan limit reached for today, skipping");
+      scopedLogger.info('Plan limit reached for today, skipping');
       return;
     }
 
@@ -207,11 +212,16 @@ export async function pushLeadsForUser(job: Job) {
     });
 
     totalToProcess = Math.min(foundCount, remainingLimit);
-    logger.info(`📊 Plan limit: ${settings.planLimit}, Remaining: ${remainingLimit}, Found: ${foundCount} properties. Will process: ${totalToProcess}`);
+    scopedLogger.info('Plan limits calculated', {
+      planLimit: settings.planLimit,
+      remainingLimit,
+      foundCount,
+      toProcess: totalToProcess
+    });
   }
 
   if (totalToProcess === 0) {
-    logger.info("✔ No properties to process");
+    scopedLogger.info('No properties to process');
     return;
   }
 
@@ -295,20 +305,19 @@ export async function pushLeadsForUser(job: Job) {
     }
   }
 
-  logger.info(
-    `🔍 Identified ${propertyIdsToProcess.length} properties and ${contactsToPush.size} unique contacts to push`
-  );
+  scopedLogger.info('Identified leads to push', {
+    propertyCount: propertyIdsToProcess.length,
+    contactCount: contactsToPush.size
+  });
 
   // Initialize progress tracking
   await updateJobProgress(job.id, {
     processed: 0,
     total: propertyIdsToProcess.length + contactsToPush.size,
     status: `Starting push for ${propertyIdsToProcess.length} properties`,
-  }).catch((err) => console.warn("Progress update failed:", err));
+  }).catch((err) => scopedLogger.warn("Progress update failed", { error: err }));
 
-  logger.info(`👥 Found ${contactsToPush.size} unique contacts to push`);
-
-  // ✅ REMOVED: Lines 248-251 duplicate declarations deleted
+  scopedLogger.info('Found unique contacts to push', { contactCount: contactsToPush.size });
 
   // ========================================================================
   // STEP 4: Push contacts first
@@ -331,9 +340,10 @@ export async function pushLeadsForUser(job: Job) {
     const localContact = await findLocalContact(contact.email, contact.phone);
 
     if (localContact?.ghlContactId) {
-      logger.info(
-        `✅ Found existing contact in local DB: ${localContact.ghlContactId} for contact ID ${contactId}`
-      );
+      scopedLogger.info('Found existing contact in local DB', {
+        ghlContactId: localContact.ghlContactId,
+        localContactId: contactId
+      });
       contactIdMap[contactId] = localContact.ghlContactId;
       continue; // Skip GHL API call
     }
@@ -349,9 +359,10 @@ export async function pushLeadsForUser(job: Job) {
     );
 
     if (existingGhlId) {
-      logger.info(
-        `✓ Found existing contact in GHL: ${existingGhlId} for contact ID ${contactId}`
-      );
+      scopedLogger.info('Found existing contact in GHL', {
+        ghlContactId: existingGhlId,
+        localContactId: contactId
+      });
       contactIdMap[contactId] = existingGhlId;
 
       // Update our local DB with the GHL ID if we don't have it
@@ -369,7 +380,7 @@ export async function pushLeadsForUser(job: Job) {
     const property = contactPropertiesMap.get(contactId);
 
     if (!property) {
-      console.warn(
+      scopedLogger.warn(
         `⚠️ Contact ID ${contactId} has no associated property data, skipping`
       );
       continue;
@@ -637,6 +648,7 @@ export async function pushLeadsForUser(job: Job) {
             Accept: "application/json",
             "Content-Type": "application/json",
             Version: API_VERSION,
+            timeout: process.env.TIMEOUT,
           },
         })
       );
@@ -649,9 +661,10 @@ export async function pushLeadsForUser(job: Job) {
           data: { pushed: true, ghlContactId },
         });
 
-        logger.info(
-          `✔ Pushed contact ID ${contact.id} (GHL: ${ghlContactId})`
-        );
+        scopedLogger.info('Pushed contact successfully', {
+          localContactId: contact.id,
+          ghlContactId
+        });
         contactIdMap[contact.id] = ghlContactId;
 
         pushedContactCount++;
@@ -661,7 +674,7 @@ export async function pushLeadsForUser(job: Job) {
           status: `Pushed ${pushedContactCount}/${contactsToPush.size} contacts`,
         }).catch((err) => console.warn("Progress update failed:", err));
       } else {
-        console.error(
+        scopedLogger.error(
           `✖ GHL responded ${resp.status} ${resp.statusText} for contact ${contact.id}`
         );
       }
@@ -681,17 +694,18 @@ export async function pushLeadsForUser(job: Job) {
         }
       } else {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        console.error(
-          `❌ Error pushing contact ID ${contact.id}:`,
-          errorMessage
+        scopedLogger.error(
+          `❌ Error pushing contact ID ${contact.id}`,
+          { error: errorMessage }
         );
       }
     }
   }
 
-  logger.info(
-    `\n👥 Contact push complete: ${pushedContactCount}/${contactsToPush.size}\n`
-  );
+  scopedLogger.info('Contact push complete', {
+    pushed: pushedContactCount,
+    total: contactsToPush.size
+  });
 
   // ========================================================================
   // STEP 5: Push properties and create associations in batches
@@ -713,7 +727,10 @@ export async function pushLeadsForUser(job: Job) {
       });
     }
 
-    logger.info(`📦 Processing property batch ${Math.floor(i / PUSH_BATCH_SIZE) + 1} (${batch.length} properties)`);
+    scopedLogger.info('Processing property batch', {
+      batchNumber: Math.floor(i / PUSH_BATCH_SIZE) + 1,
+      propertyCount: batch.length
+    });
 
     for (const p of batch) {
       try {
@@ -721,9 +738,9 @@ export async function pushLeadsForUser(job: Job) {
         const localProperty = await findLocalProperty(p.addressFull);
 
         if (localProperty?.ghlPropertyId) {
-          logger.info(
-            `✅ Found existing property in local DB: ${localProperty.ghlPropertyId}`
-          );
+          scopedLogger.info('Found existing property in local DB', {
+            ghlPropertyId: localProperty.ghlPropertyId
+          });
 
           // Mark as pushed if not already
           if (!p.pushed) {
@@ -761,9 +778,10 @@ export async function pushLeadsForUser(job: Job) {
           }
 
           if (ghlContactId && localProperty.ghlPropertyId) {
-            logger.info(
-              `🔗 Associating existing property ${p.id} with contact ${p.ownerId}`
-            );
+            scopedLogger.info('Associating existing property with contact', {
+              localPropertyId: p.id,
+              ownerId: p.ownerId
+            });
             await rateLimitedRequest(() =>
               ensureContactPropertyAssociation(
                 ghlContactId,
@@ -783,7 +801,7 @@ export async function pushLeadsForUser(job: Job) {
         );
 
         if (existingGhlId) {
-          logger.info(`Found existing property in GHL: ${existingGhlId}`);
+          scopedLogger.info('Found existing property in GHL', { ghlPropertyId: existingGhlId });
 
           // Mark as pushed with timestamp if not already marked
           if (!p.pushed) {
@@ -818,15 +836,19 @@ export async function pushLeadsForUser(job: Job) {
           }
 
           if (ghlContactId && existingGhlId) {
-            logger.info(
-              `🔗 Associating existing property ${p.id} (GHL: ${existingGhlId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`
-            );
+            scopedLogger.info('Associating existing property with contact', {
+              localPropertyId: p.id,
+              ghlPropertyId: existingGhlId,
+              ownerId: p.ownerId,
+              ghlContactId
+            });
             await rateLimitedRequest(() =>
               ensureContactPropertyAssociation(
                 ghlContactId,
                 existingGhlId,
                 accessToken,
-                locationId
+                locationId,
+                correlationId
               )
             );
             associationCount++;
@@ -835,7 +857,7 @@ export async function pushLeadsForUser(job: Job) {
         }
 
         if (!p.ownerId) {
-          console.warn(`⚠️ Property ID ${p.id} has no ownerId, skipping`);
+          scopedLogger.warn(`⚠️ Property ID ${p.id} has no ownerId, skipping`);
           continue;
         }
 
@@ -956,6 +978,7 @@ export async function pushLeadsForUser(job: Job) {
                 Accept: "application/json",
                 "Content-Type": "application/json",
                 Version: API_VERSION,
+                timeout: process.env.TIMEOUT,
               },
             }
           )
@@ -976,14 +999,17 @@ export async function pushLeadsForUser(job: Job) {
           }
 
           if (!ghlPropertyId) {
-            console.warn(
+            scopedLogger.warn(
               `⚠️ Created property ${p.id} but could not find GHL id in response.`
             );
-            console.debug("Full resp.data:", JSON.stringify(resp.data, null, 2));
+            scopedLogger.debug("Full resp.data", { data: resp.data });
           }
 
           pushedPropertyCount++;
-          logger.info(`✔ Pushed property ID ${p.id} (GHL: ${ghlPropertyId})`);
+          scopedLogger.info('Pushed property successfully', {
+            localPropertyId: p.id,
+            ghlPropertyId
+          });
 
           await updateJobProgress(job.id, {
             processed: contactsToPush.size + pushedPropertyCount,
@@ -993,25 +1019,29 @@ export async function pushLeadsForUser(job: Job) {
 
           // Create association
           if (ghlPropertyId && ghlContactId) {
-            logger.info(
-              `🔗 Associating property ${p.id} (GHL: ${ghlPropertyId}) with contact ${p.ownerId} (GHL: ${ghlContactId})`
-            );
+            scopedLogger.info('Associating new property with contact', {
+              localPropertyId: p.id,
+              ghlPropertyId,
+              ownerId: p.ownerId,
+              ghlContactId
+            });
             await rateLimitedRequest(() =>
               ensureContactPropertyAssociation(
                 ghlContactId,
                 ghlPropertyId,
                 accessToken,
-                locationId
+                locationId,
+                correlationId
               )
             )
             associationCount++;
           } else {
-            console.warn(
+            scopedLogger.warn(
               `⚠️ Skipping association for property ${p.id}: missing GHL IDs`
             );
           }
         } else {
-          console.error(
+          scopedLogger.error(
             `✖ GHL responded ${resp.status} ${resp.statusText} for property ${p.id}`
           );
         }
@@ -1031,7 +1061,7 @@ export async function pushLeadsForUser(job: Job) {
           }
         } else {
           const errorMessage = err instanceof Error ? err.message : String(err);
-          console.error(`❌ Error pushing property ID ${p.id}:`, errorMessage);
+          scopedLogger.error(`❌ Error pushing property ID ${p.id}`, { error: errorMessage });
         }
       }
     }
@@ -1040,19 +1070,5 @@ export async function pushLeadsForUser(job: Job) {
     await new Promise(resolve => setTimeout(resolve, 0));
   }
 
-  logger.info(`
-========================================
-✅ Job ${job.id} COMPLETE
-========================================
-📊 Properties pushed: ${pushedPropertyCount}/${propertyIdsToProcess.length}
-👥 Contacts pushed: ${pushedContactCount}/${contactsToPush.size}
-🔗 Associations created: ${associationCount}
-🔑 OAuth token used for: ${user.email || user.id}
-📍 Location ID: ${locationId}
-🎯 Mode: ${isPreIdentified
-      ? "Daily Queue (Pre-identified)"
-      : "Webhook (Query with limit)"
-    }
-========================================
-  `);
+  scopedLogger.info('Job complete', { jobId: job.id, propertiesPushed: pushedPropertyCount, totalProperties: propertyIdsToProcess.length, contactsPushed: pushedContactCount, totalContacts: contactsToPush.size, associationsCreated: associationCount, userId: user.email || user.id, locationId, mode: isPreIdentified ? 'Daily Queue (Pre-identified)' : 'Webhook (Query with limit)' });
 }

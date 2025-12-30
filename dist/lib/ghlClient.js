@@ -1,11 +1,14 @@
 // src/lib/ghlClient.ts
 import axios from "axios";
 import { PrismaClient } from "@prisma/client";
+import { createLogger } from "@/lib/secureLogger";
+const logger = createLogger('GHLClient');
 const prisma = new PrismaClient();
 const GHL_TOKEN_URL = "https://rest.gohighlevel.com/oauth/token";
 const CLIENT_ID = process.env.GHL_CLIENT_ID;
 const CLIENT_SECRET = process.env.GHL_CLIENT_SECRET;
-export async function getValidAccessToken(user) {
+export async function getValidAccessToken(user, correlationId) {
+    const scopedLogger = correlationId ? logger.withCorrelationId(correlationId) : logger;
     const { accessToken, refreshToken, tokenExpiresAt } = user;
     // 1️⃣ Ensure we actually have tokens and an expiry
     if (!accessToken || !refreshToken || !tokenExpiresAt) {
@@ -23,7 +26,8 @@ export async function getValidAccessToken(user) {
         client_id: CLIENT_ID,
         client_secret: CLIENT_SECRET,
         refresh_token: refreshToken,
-    });
+    }, { timeout: parseInt(process.env.TIMEOUT || "30000") });
+    scopedLogger.info("Refreshed access token", { userId: user.id });
     const { access_token: newAccessToken, refresh_token: newRefreshToken, expires_in: newExpiresIn, } = resp.data;
     // 4️⃣ Persist fresh tokens
     await prisma.user.update({

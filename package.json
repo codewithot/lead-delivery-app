@@ -13,7 +13,11 @@
     "worker:prod": "node --max-old-space-size=768 --expose-gc dist/workers/master.js",
     "worker:standalone": "node --max-old-space-size=768 --expose-gc --import tsx src/workers/standalone.ts",
     "provision-queues": "tsx scripts/provision-queues.ts",
-    "test:webhook": "curl -X POST http://localhost:3000/api/ingest-complete -H 'Content-Type: application/json' -H 'x-hook-secret: your-webhook-secret' -d '{\"runId\": \"test-123\", \"ingestedAt\": \"2025-01-01T00:00:00Z\"}'"
+    "test:webhook": "curl -X POST http://localhost:3000/api/ingest-complete -H 'Content-Type: application/json' -H 'x-hook-secret: your-webhook-secret' -d '{\"runId\": \"test-123\", \"ingestedAt\": \"2025-01-01T00:00:00Z\"}'",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch --runInBand",
+    "test:coverage": "jest --coverage --runInBand",
+    "test:verbose": "jest --verbose --runInBand"
   },
   "dependencies": {
     "@next-auth/prisma-adapter": "^1.0.7",
@@ -43,16 +47,21 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^6.9.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/csv-parse": "^1.1.12",
     "@types/ioredis": "^4.28.10",
+    "@types/jest": "^30.0.0",
     "@types/node": "^20.19.7",
     "@types/node-cron": "^3.0.11",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "15.3.4",
+    "jest": "^30.2.0",
+    "node-mocks-http": "^1.17.2",
     "tailwindcss": "^4",
+    "ts-jest": "^29.4.6",
     "ts-node": "^10.9.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.2"

@@ -2,6 +2,9 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('AuthRegister');
 
 const prisma = new PrismaClient();
 
@@ -65,7 +68,7 @@ export default async function handler(
 
         return res.status(201).json({ message: "User created successfully", userId: user.id });
     } catch (error: unknown) {
-        console.error("[register] Error:", error);
+        logger.error("[register] Error", { error });
         if (error instanceof z.ZodError) {
             return res.status(400).json({ message: error.errors[0].message });
         }

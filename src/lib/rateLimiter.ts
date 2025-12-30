@@ -63,7 +63,7 @@ function createRateLimiter(): Bottleneck {
         reservoirRefreshInterval: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
 
         // Timeout settings
-        timeout: 30000, // 30 second timeout for queued jobs
+        timeout: parseInt(process.env.TIMEOUT || "30000"), // 30 second timeout for queued jobs
       });
 
       console.log('✅ Redis-backed rate limiter created successfully');

@@ -8,6 +8,9 @@ import {
     withRateLimit,
 } from "@/lib/apiRateLimiter";
 import { requireAdmin } from "@/lib/adminGuard";
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('AdminRateLimits');
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (req.method !== "GET") {
@@ -55,7 +58,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             limits,
         });
     } catch (error) {
-        console.error("Error fetching rate limits:", error);
+        logger.error("Error fetching rate limits", { error });
         return res.status(500).json({ error: "Internal server error" });
     }
 }

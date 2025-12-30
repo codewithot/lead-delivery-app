@@ -4,6 +4,9 @@ import { authOptions } from "./auth/[...nextauth]";
 import { PrismaClient } from "@prisma/client";
 import { getCsrfToken } from "next-auth/react";
 import { withRateLimit } from "@/lib/apiRateLimiter";
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('UserSettings');
 
 const prisma = new PrismaClient();
 
@@ -14,14 +17,14 @@ async function handler(
   const csrfToken = req.headers["x-csrf-token"];
   const validToken = await getCsrfToken({ req });
   if (csrfToken !== validToken) {
-    console.log("Invalid CSRF token");
+    logger.warn("Invalid CSRF token");
     return res.status(403).json({ error: "Invalid CSRF token" });
   }
-  console.log("API called:", req.method, req.url);
+  logger.info("API called", { method: req.method, url: req.url });
 
   // Check request method early
   if (req.method !== "PUT") {
-    console.log("Invalid method:", req.method);
+    logger.warn("Invalid method", { method: req.method });
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
@@ -30,18 +33,18 @@ async function handler(
   try {
     session = await getServerSession(req, res, authOptions);
   } catch (error) {
-    console.error("Error getting session:", error);
+    logger.error("Error getting session", { error });
     return res.status(500).json({ error: "Failed to get session" });
   }
-  console.log("Session object [user-settings]:", session);
+  logger.debug("Session object", { session });
 
   if (!session) {
-    console.log("No session found");
+    logger.warn("No session found");
     return res.status(401).json({ error: "Unauthorized - No session" });
   }
 
   if (!session?.user?.email) {
-    console.log("Session user missing email:", session?.user);
+    logger.warn("Session user missing email", { user: session?.user });
     return res.status(401).json({ error: "Unauthorized - No user email" });
   }
 
@@ -63,8 +66,9 @@ async function handler(
     return res.status(400).json({ error: "Invalid payload" });
   }
 
-  console.log("Request body:", {
-    zipCodes,
+
+  logger.info("Request body validated", {
+    zipCodes: zipCodes.length,
     radius,
     priceMin,
     priceMax,
@@ -77,11 +81,11 @@ async function handler(
     });
 
     if (!user) {
-      console.log("User not found for email:", session.user.email);
+      logger.warn("User not found for email", { email: session.user.email });
       return res.status(404).json({ error: "User not found" });
     }
 
-    console.log("Found user:", user.email);
+    logger.debug("Found user", { email: user.email });
 
     const upserted = await prisma.userSettings.upsert({
       where: { userId: user.id },
@@ -102,10 +106,12 @@ async function handler(
       },
     });
 
-    console.log("UserSettings upserted:", upserted);
+
+
+    logger.info("UserSettings upserted", { id: upserted.id });
     return res.status(200).json({ message: "Settings saved." });
   } catch (err) {
-    console.error("Error during DB operation:", err);
+    logger.error("Error during DB operation", { error: err });
     return res.status(500).json({ error: "Something went wrong" });
   }
 }

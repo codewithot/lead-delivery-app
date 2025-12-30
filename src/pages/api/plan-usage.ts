@@ -3,6 +3,9 @@ import { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import { PrismaClient } from "@prisma/client";
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('PlanUsage');
 
 const prisma = new PrismaClient();
 
@@ -73,7 +76,7 @@ export default async function handler(
       canPushMore: remaining > 0,
     });
   } catch (error) {
-    console.error("Error fetching plan usage:", error);
+    logger.error("Error fetching plan usage", { error });
     return res.status(500).json({
       error: "Internal server error",
       message: error instanceof Error ? error.message : "Unknown error",

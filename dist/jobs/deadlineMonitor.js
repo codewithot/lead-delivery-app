@@ -1,4 +1,7 @@
 // src/jobs/deadlineMonitor.ts
+import { fileURLToPath } from 'url';
+import { createLogger } from "@/lib/secureLogger";
+const logger = createLogger('DeadlineMonitor');
 import { PrismaClient } from "@prisma/client";
 import { getTodayQueueName } from "../lib/queue";
 import { minutesUntilDeadline, deadlineDateTime, formatForLog, getRegionTimezone, } from "../lib/timezone";
@@ -134,34 +137,15 @@ export function checkAlerts(metrics, config = DEFAULT_ALERT_CONFIG) {
  */
 export function logMetrics(metrics, verbose = false) {
     if (verbose) {
-        console.log(`\n${"=".repeat(70)}`);
-        console.log(`📊 Queue Monitor - ${metrics.timestamp}`);
-        console.log(`${"=".repeat(70)}`);
-        console.log(`Queue: ${metrics.queueName}`);
-        console.log(`⏰ Minutes until deadline: ${metrics.minutesUntilDeadline}`);
-        console.log(`📦 Queue depth: ${metrics.queueDepth}`);
-        console.log(`✅ Completed (last min): ${metrics.completedLastMin}`);
-        console.log(`❌ Failed (last min): ${metrics.failedLastMin}`);
-        console.log(`📈 Processing rate: ${metrics.processingRate.toFixed(2)} jobs/min`);
-        console.log(`⏱️ Est. completion: ${metrics.estimatedCompletionMinutes === Infinity
-            ? "N/A"
-            : `${metrics.estimatedCompletionMinutes} min`}`);
-        console.log(`👴 Oldest job age: ${metrics.oldestJobAgeSeconds}s`);
-        console.log(`💾 Memory: RSS ${metrics.rssMB} MB, Heap ${metrics.heapMB} MB`);
-        if (metrics.alerts.length > 0) {
-            console.log(`\n🚨 ALERTS:`);
-            metrics.alerts.forEach((alert) => console.log(`   ${alert}`));
-        }
-        console.log(`${"=".repeat(70)}\n`);
+        logger.info("Deadline Monitor Metrics", { metrics });
     }
     else {
-        // Compact one-line format
-        console.log(`[${metrics.timestamp}] ` +
-            `Queue: ${metrics.queueDepth} pending | ` +
-            `Rate: ${metrics.processingRate}/min | ` +
-            `Deadline: ${metrics.minutesUntilDeadline}m | ` +
-            `Memory: ${metrics.rssMB}MB | ` +
-            `${metrics.alerts.length > 0 ? "⚠️ ALERTS" : "✅"}`);
+        logger.info("Deadline Monitor Status", {
+            queueDepth: metrics.queueDepth,
+            rate: metrics.processingRate,
+            deadlineMinutes: metrics.minutesUntilDeadline,
+            alerts: metrics.alerts.length
+        });
     }
 }
 /**
@@ -182,11 +166,11 @@ export async function sendAlerts(alerts) {
                 }),
             });
             if (!response.ok) {
-                console.error("Failed to send Slack alert:", response.statusText);
+                logger.error("Failed to send Slack alert", { status: response.statusText });
             }
         }
         catch (error) {
-            console.error("Error sending Slack alert:", error);
+            logger.error("Error sending Slack alert", { error });
         }
     }
     // Example: Log to monitoring service
@@ -196,10 +180,11 @@ export async function sendAlerts(alerts) {
  * Main monitoring loop
  */
 export async function startMonitoring(intervalSeconds = 10, alertConfig) {
-    console.log(`\n🚀 Starting Deadline Monitor`);
-    console.log(`   Interval: ${intervalSeconds} seconds`);
-    console.log(`   Timezone: ${getRegionTimezone()}`);
-    console.log(`   Deadline: ${formatForLog(deadlineDateTime())}\n`);
+    logger.info(`🚀 Starting Deadline Monitor`, {
+        intervalSeconds,
+        timezone: getRegionTimezone(),
+        deadline: formatForLog(deadlineDateTime())
+    });
     const config = alertConfig || DEFAULT_ALERT_CONFIG;
     const monitorInterval = setInterval(async () => {
         try {
@@ -213,22 +198,22 @@ export async function startMonitoring(intervalSeconds = 10, alertConfig) {
             }
             // Stop monitoring if past deadline and queue is empty
             if (metrics.minutesUntilDeadline < -60 && metrics.queueDepth === 0) {
-                console.log(`\n✅ Queue empty and past deadline window, stopping monitor\n`);
+                logger.info(`✅ Queue empty and past deadline window, stopping monitor`);
                 clearInterval(monitorInterval);
             }
         }
         catch (error) {
-            console.error("Error in monitoring loop:", error);
+            logger.error("Error in monitoring loop", { error });
         }
     }, intervalSeconds * 1000);
     // Keep process alive
     process.on("SIGINT", () => {
-        console.log("\n👋 Stopping monitor...");
+        logger.info("👋 Stopping monitor...");
         clearInterval(monitorInterval);
         process.exit(0);
     });
     process.on("SIGTERM", () => {
-        console.log("\n👋 Stopping monitor...");
+        logger.info("👋 Stopping monitor...");
         clearInterval(monitorInterval);
         process.exit(0);
     });
@@ -236,16 +221,16 @@ export async function startMonitoring(intervalSeconds = 10, alertConfig) {
 /**
  * CLI entry point
  */
-if (require.main === module) {
+if (import.meta.url && process.argv[1] === fileURLToPath(import.meta.url)) {
     const args = process.argv.slice(2);
     const intervalArg = args.find((arg) => arg.startsWith("--interval="));
     const interval = intervalArg ? parseInt(intervalArg.split("=")[1], 10) : 10;
     const verbose = args.includes("--verbose");
     if (verbose) {
-        console.log("Running in verbose mode");
+        logger.info("Running in verbose mode");
     }
     startMonitoring(interval).catch((error) => {
-        console.error("💥 Monitor failed:", error);
+        logger.error("💥 Monitor failed", { error });
         process.exit(1);
     });
 }

@@ -196,11 +196,18 @@ export var LogLevel;
  * Main secure logger class
  */
 export class SecureLogger {
-    constructor(context = 'App') {
+    constructor(context = 'App', correlationId) {
         this.context = context;
+        this.correlationId = correlationId;
     }
     /**
-     * Format log message with context and timestamp
+     * Create a new logger instance with a correlation ID
+     */
+    withCorrelationId(id) {
+        return new SecureLogger(this.context, id);
+    }
+    /**
+     * Format log message with context, timestamp, and optional correlation ID
      */
     format(level, message, options = {}) {
         const parts = [];
@@ -209,6 +216,9 @@ export class SecureLogger {
         }
         if (options.includeLevel !== false) {
             parts.push(`[${level}]`);
+        }
+        if (this.correlationId) {
+            parts.push(`[${this.correlationId}]`);
         }
         parts.push(`[${this.context}]`);
         parts.push(message);
@@ -290,10 +300,38 @@ export class SecureLogger {
 // CONVENIENCE FUNCTIONS
 // ============================================================================
 /**
+ * Generate a standardized correlation ID for distributed tracing
+ *
+ * @param prefix - Semantic prefix (e.g., 'job', 'webhook', 'api')
+ * @param id - Unique identifier (job ID, request ID, etc.)
+ * @returns Formatted correlation ID: {prefix}-{id}-{timestamp}
+ *
+ * @example
+ * const correlationId = generateCorrelationId('job', job.id);
+ * // Returns: "job-abc123-1703145600000"
+ */
+export function generateCorrelationId(prefix, id) {
+    return `${prefix}-${id}-${Date.now()}`;
+}
+/**
  * Create a logger for a specific context
  */
 export function createLogger(context) {
     return new SecureLogger(context);
+}
+/**
+ * Create a logger with correlation ID for distributed tracing
+ *
+ * @param context - Logger context (e.g., 'Worker', 'API')
+ * @param correlationId - Correlation ID to track across operations
+ * @returns SecureLogger instance with correlation ID
+ *
+ * @example
+ * const logger = createLoggerWithCorrelation('Worker', `job-${job.id}-${Date.now()}`);
+ * logger.info('Processing job'); // Logs: [job-123-...] [Worker] Processing job
+ */
+export function createLoggerWithCorrelation(context, correlationId) {
+    return new SecureLogger(context, correlationId);
 }
 /**
  * Default logger instance
@@ -354,6 +392,8 @@ export function safeAccount(account) {
 // USAGE EXAMPLES (for documentation)
 // ============================================================================
 /*
+BASIC LOGGING:
+
 BEFORE:
   console.log("User logged in:", user);
   
@@ -391,4 +431,56 @@ BEFORE:
   
 AFTER:
   logger.error("Failed to process", { error, context: someObject });
+
+---
+
+CORRELATION ID PATTERNS:
+
+1. Job Processing:
+   const correlationId = generateCorrelationId('job', job.id);
+   const logger = createLogger('Worker').withCorrelationId(correlationId);
+   logger.info('Processing job'); // [job-abc123-1703145600000] [Worker] Processing job
+   
+   // Pass to downstream functions
+   await pushLeadsForUser(job, correlationId);
+
+2. API Requests:
+   const correlationId =
+     req.headers['x-correlation-id'] ||
+     generateCorrelationId('api', Date.now());
+   const logger = createLogger('API').withCorrelationId(correlationId);
+   logger.info('Request received');
+
+3. Webhook Handlers:
+   const correlationId = generateCorrelationId('webhook', payload.runId);
+   const logger = createLoggerWithCorrelation('Webhook', correlationId);
+   logger.info('Webhook processing started');
+   
+   // Include in spawned jobs
+   const jobPayload = { ...data, correlationId };
+
+4. Nested Operations:
+   export async function processData(data: Data, correlationId?: string) {
+     const logger = correlationId
+       ? createLogger('DataProcessor').withCorrelationId(correlationId)
+       : createLogger('DataProcessor');
+     
+     logger.info('Processing data');
+     // All logs in this function automatically include correlation ID
+   }
+
+5. External API Calls:
+   const resp = await axios.get(url, {
+     headers: {
+       'Authorization': `Bearer ${token}`,
+       'X-Correlation-ID': correlationId, // Pass to external service
+     },
+   });
+   logger.info('External API call completed', { status: resp.status });
+
+BENEFITS:
+- Single grep command finds all logs for a specific operation
+- Trace request flow across multiple services/functions
+- Debug production issues faster
+- Audit trail for compliance
 */ 

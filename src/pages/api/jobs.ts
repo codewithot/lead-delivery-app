@@ -5,6 +5,9 @@ import { authOptions } from "./auth/[...nextauth]";
 import { PrismaClient } from "@prisma/client";
 import { getJobProgress } from "@/lib/jobProgress";
 import { withRateLimit } from "@/lib/apiRateLimiter";
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('JobsAPI');
 
 const prisma = new PrismaClient();
 
@@ -22,7 +25,7 @@ async function handler(
     const userId = session?.user?.userId;
 
     if (!userId) {
-      console.warn("Missing userId in session");
+      logger.warn("Missing userId in session");
       return res.status(401).json({ error: "Unauthorized - missing userId" });
     }
 
@@ -31,7 +34,7 @@ async function handler(
     });
 
     if (!user) {
-      console.warn("User not found for ID:", userId);
+      logger.warn("User not found for ID", { userId });
       return res.status(404).json({ error: "User not found" });
     }
 
@@ -50,10 +53,10 @@ async function handler(
       })
     );
 
-    console.log(`Found ${jobsWithProgress.length} jobs for user ${userId}`);
+    logger.info(`Found ${jobsWithProgress.length} jobs`, { userId });
     return res.status(200).json(jobsWithProgress);
   } catch (error) {
-    console.error("Error fetching jobs:", error);
+    logger.error("Error fetching jobs", { error });
     return res.status(500).json({ message: "Internal server error" });
   }
 }

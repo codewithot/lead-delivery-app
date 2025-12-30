@@ -4,6 +4,9 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { PrismaClient, Prisma } from "@prisma/client";
 import { isAdmin } from "@/lib/adminGuard";
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('JobsFailed');
 
 const prisma = new PrismaClient();
 
@@ -74,7 +77,7 @@ export default async function handler(
       },
     });
   } catch (error) {
-    console.error("Error fetching failed jobs:", error);
+    logger.error("Error fetching failed jobs", { error });
     return res.status(500).json({
       error: "Internal server error",
       message: error instanceof Error ? error.message : "Unknown error",

@@ -5,6 +5,9 @@ import { authOptions } from "../auth/[...nextauth]";
 import { PrismaClient } from "@prisma/client";
 import { requireAdmin } from "@/lib/adminGuard";
 import { withRateLimit } from "@/lib/apiRateLimiter";
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('AdminUsers');
 
 const prisma = new PrismaClient();
 
@@ -40,7 +43,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
         return res.status(200).json({ users });
     } catch (error) {
-        console.error("Error fetching users:", error);
+        logger.error("Error fetching users", { error });
         return res.status(500).json({ error: "Internal server error" });
     }
 }

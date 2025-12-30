@@ -10,11 +10,11 @@ import {
 import { spawn } from "child_process";
 import path from "path";
 import { withRateLimit } from "@/lib/apiRateLimiter";
-import { createLogger } from "@/lib/secureLogger";
+import { createLogger, generateCorrelationId } from "@/lib/secureLogger";
 
 const logger = createLogger('IngestWebhook');
 
-const prisma = new PrismaClient();
+let prisma: PrismaClient;
 
 const webhookSchema = z.object({
   runId: z.union([z.string(), z.number()]).transform((val) => String(val)),
@@ -31,7 +31,18 @@ async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  logger.info("📥 Webhook received");
+  // Lazy initialize Prisma to allow for correct mocking in tests
+  if (!prisma) {
+    prisma = new PrismaClient();
+  }
+
+  // Extract or generate correlation ID
+  const correlationId =
+    (req.headers['x-correlation-id'] as string) ||
+    generateCorrelationId('webhook-ingest', Date.now());
+  const scopedLogger = logger.withCorrelationId(correlationId);
+
+  scopedLogger.info('Webhook received');
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -42,13 +53,13 @@ async function handler(
     const hookSecret = headers["x-hook-secret"];
 
     if (!hookSecret || hookSecret !== process.env.WEBHOOK_SECRET) {
-      logger.info("❌ Invalid or missing webhook secret");
+      scopedLogger.info('Invalid or missing webhook secret');
       return res.status(401).json({ error: "Unauthorized" });
     }
 
     const body = req.body;
     if (!body) {
-      logger.info("❌ Empty request body");
+      scopedLogger.info('Empty request body');
       return res.status(400).json({ error: "Request body is required" });
     }
 
@@ -63,22 +74,22 @@ async function handler(
           receivedAt: new Date(),
         },
       });
-      logger.info("✅ Webhook logged successfully");
+      scopedLogger.info('Webhook logged successfully');
     } catch (logError) {
       const logErrorMessage =
         logError instanceof Error ? logError.message : String(logError);
-      console.error("⚠️ Failed to log webhook:", logErrorMessage);
+      scopedLogger.error("⚠️ Failed to log webhook", { error: logErrorMessage });
     }
 
     // Validate payload
     let validatedData;
     try {
       validatedData = webhookSchema.parse(body);
-      logger.info("✅ Payload validated:", validatedData);
+      scopedLogger.info('Payload validated', validatedData);
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
-      console.error("❌ Validation failed:", errorMessage);
+      scopedLogger.error("❌ Validation failed", { error: errorMessage });
       return res.status(400).json({
         error: "Invalid payload format",
         details: error instanceof Error ? error.message : "Validation failed",
@@ -86,7 +97,7 @@ async function handler(
       });
     }
 
-    logger.info("🎯 Processing webhook for runId:", validatedData.runId);
+    scopedLogger.info('Processing webhook', { runId: validatedData.runId });
 
     // Get queue instance
     const boss = await getQueueInstance();
@@ -198,7 +209,7 @@ async function handler(
         });
 
         if (!jobId) {
-          console.error(
+          scopedLogger.error(
             `❌ Failed to create batch job for user ${user.id} batch ${batchIndex}`
           );
           continue;
@@ -260,7 +271,7 @@ async function handler(
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
-        console.error("❌ Failed to spawn worker process:", errorMessage);
+        logger.error("❌ Failed to spawn worker process", { error: errorMessage });
         // Don't fail the webhook - jobs are queued
       }
     } else {
@@ -278,7 +289,7 @@ async function handler(
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error("💥 Unexpected error:", errorMessage);
+    scopedLogger.error("💥 Unexpected error", { error: errorMessage });
     return res.status(500).json({
       error: "Internal server error",
       details: error instanceof Error ? error.message : "Unknown error",

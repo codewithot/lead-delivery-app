@@ -1,4 +1,8 @@
 // src/jobs/deadlineMonitor.ts
+import { fileURLToPath } from 'url';
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('DeadlineMonitor');
 import { PrismaClient } from "@prisma/client";
 import { getTodayQueueName } from "../lib/queue";
 import {
@@ -102,8 +106,8 @@ export async function collectMetrics(): Promise<MonitorMetrics> {
 
   const oldestJobAgeSeconds = oldestJob
     ? Math.floor(
-        now.diff(DateTime.fromJSDate(oldestJob.createdAt), "seconds").seconds
-      )
+      now.diff(DateTime.fromJSDate(oldestJob.createdAt), "seconds").seconds
+    )
     : 0;
 
   // Calculate processing rate and estimate completion time
@@ -147,7 +151,7 @@ export function checkAlerts(
   ) {
     alerts.push(
       `🚨 DEADLINE WARNING: ${metrics.minutesUntilDeadline} minutes until 7:00 AM, ` +
-        `${metrics.queueDepth} jobs still pending`
+      `${metrics.queueDepth} jobs still pending`
     );
   }
 
@@ -165,7 +169,7 @@ export function checkAlerts(
     const ageMinutes = Math.floor(metrics.oldestJobAgeSeconds / 60);
     alerts.push(
       `⚠️ OLD JOB: Oldest job has been pending for ${ageMinutes} minutes ` +
-        `(threshold: ${config.oldJobThresholdMinutes} minutes)`
+      `(threshold: ${config.oldJobThresholdMinutes} minutes)`
     );
   }
 
@@ -189,7 +193,7 @@ export function checkAlerts(
   ) {
     alerts.push(
       `⚠️ COMPLETION RISK: Estimated ${metrics.estimatedCompletionMinutes} minutes to complete, ` +
-        `but only ${metrics.minutesUntilDeadline} minutes until deadline`
+      `but only ${metrics.minutesUntilDeadline} minutes until deadline`
     );
   }
 
@@ -201,7 +205,7 @@ export function checkAlerts(
   if (metrics.rssMB > memoryThresholdMB) {
     alerts.push(
       `⚠️ HIGH MEMORY: RSS ${metrics.rssMB} MB ` +
-        `(threshold: ${memoryThresholdMB} MB)`
+      `(threshold: ${memoryThresholdMB} MB)`
     );
   }
 
@@ -216,44 +220,14 @@ export function logMetrics(
   verbose: boolean = false
 ): void {
   if (verbose) {
-    console.log(`\n${"=".repeat(70)}`);
-    console.log(`📊 Queue Monitor - ${metrics.timestamp}`);
-    console.log(`${"=".repeat(70)}`);
-    console.log(`Queue: ${metrics.queueName}`);
-    console.log(`⏰ Minutes until deadline: ${metrics.minutesUntilDeadline}`);
-    console.log(`📦 Queue depth: ${metrics.queueDepth}`);
-    console.log(`✅ Completed (last min): ${metrics.completedLastMin}`);
-    console.log(`❌ Failed (last min): ${metrics.failedLastMin}`);
-    console.log(
-      `📈 Processing rate: ${metrics.processingRate.toFixed(2)} jobs/min`
-    );
-    console.log(
-      `⏱️ Est. completion: ${
-        metrics.estimatedCompletionMinutes === Infinity
-          ? "N/A"
-          : `${metrics.estimatedCompletionMinutes} min`
-      }`
-    );
-    console.log(`👴 Oldest job age: ${metrics.oldestJobAgeSeconds}s`);
-    console.log(
-      `💾 Memory: RSS ${metrics.rssMB} MB, Heap ${metrics.heapMB} MB`
-    );
-
-    if (metrics.alerts.length > 0) {
-      console.log(`\n🚨 ALERTS:`);
-      metrics.alerts.forEach((alert) => console.log(`   ${alert}`));
-    }
-    console.log(`${"=".repeat(70)}\n`);
+    logger.info("Deadline Monitor Metrics", { metrics });
   } else {
-    // Compact one-line format
-    console.log(
-      `[${metrics.timestamp}] ` +
-        `Queue: ${metrics.queueDepth} pending | ` +
-        `Rate: ${metrics.processingRate}/min | ` +
-        `Deadline: ${metrics.minutesUntilDeadline}m | ` +
-        `Memory: ${metrics.rssMB}MB | ` +
-        `${metrics.alerts.length > 0 ? "⚠️ ALERTS" : "✅"}`
-    );
+    logger.info("Deadline Monitor Status", {
+      queueDepth: metrics.queueDepth,
+      rate: metrics.processingRate,
+      deadlineMinutes: metrics.minutesUntilDeadline,
+      alerts: metrics.alerts.length
+    });
   }
 }
 
@@ -276,10 +250,10 @@ export async function sendAlerts(alerts: string[]): Promise<void> {
       });
 
       if (!response.ok) {
-        console.error("Failed to send Slack alert:", response.statusText);
+        logger.error("Failed to send Slack alert", { status: response.statusText });
       }
     } catch (error) {
-      console.error("Error sending Slack alert:", error);
+      logger.error("Error sending Slack alert", { error });
     }
   }
 
@@ -294,10 +268,11 @@ export async function startMonitoring(
   intervalSeconds: number = 10,
   alertConfig?: AlertConfig
 ): Promise<void> {
-  console.log(`\n🚀 Starting Deadline Monitor`);
-  console.log(`   Interval: ${intervalSeconds} seconds`);
-  console.log(`   Timezone: ${getRegionTimezone()}`);
-  console.log(`   Deadline: ${formatForLog(deadlineDateTime())}\n`);
+  logger.info(`🚀 Starting Deadline Monitor`, {
+    intervalSeconds,
+    timezone: getRegionTimezone(),
+    deadline: formatForLog(deadlineDateTime())
+  });
 
   const config = alertConfig || DEFAULT_ALERT_CONFIG;
 
@@ -316,25 +291,23 @@ export async function startMonitoring(
 
       // Stop monitoring if past deadline and queue is empty
       if (metrics.minutesUntilDeadline < -60 && metrics.queueDepth === 0) {
-        console.log(
-          `\n✅ Queue empty and past deadline window, stopping monitor\n`
-        );
+        logger.info(`✅ Queue empty and past deadline window, stopping monitor`);
         clearInterval(monitorInterval);
       }
     } catch (error) {
-      console.error("Error in monitoring loop:", error);
+      logger.error("Error in monitoring loop", { error });
     }
   }, intervalSeconds * 1000);
 
   // Keep process alive
   process.on("SIGINT", () => {
-    console.log("\n👋 Stopping monitor...");
+    logger.info("👋 Stopping monitor...");
     clearInterval(monitorInterval);
     process.exit(0);
   });
 
   process.on("SIGTERM", () => {
-    console.log("\n👋 Stopping monitor...");
+    logger.info("👋 Stopping monitor...");
     clearInterval(monitorInterval);
     process.exit(0);
   });
@@ -343,7 +316,7 @@ export async function startMonitoring(
 /**
  * CLI entry point
  */
-if (require.main === module) {
+if (import.meta.url && process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const intervalArg = args.find((arg) => arg.startsWith("--interval="));
   const interval = intervalArg ? parseInt(intervalArg.split("=")[1], 10) : 10;
@@ -351,11 +324,11 @@ if (require.main === module) {
   const verbose = args.includes("--verbose");
 
   if (verbose) {
-    console.log("Running in verbose mode");
+    logger.info("Running in verbose mode");
   }
 
   startMonitoring(interval).catch((error) => {
-    console.error("💥 Monitor failed:", error);
+    logger.error("💥 Monitor failed", { error });
     process.exit(1);
   });
 }

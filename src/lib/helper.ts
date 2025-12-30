@@ -405,8 +405,11 @@ export async function getAssociationIdBetween(
   firstObjectKey: string,
   secondObjectKey: string,
   privateToken: string,
-  locationId: string
+  locationId: string,
+  correlationId?: string
 ): Promise<string | undefined> {
+  const scopedLogger = correlationId ? logger.withCorrelationId(correlationId) : logger;
+
   try {
     const resp = await axios.get(
       `${GHL_BASE_URL}/associations/objectKey/${encodeURIComponent(
@@ -421,13 +424,14 @@ export async function getAssociationIdBetween(
         params: {
           locationId: locationId,
         },
+        timeout: parseInt(process.env.TIMEOUT || "30000"),
       }
     );
 
     if (!Array.isArray(resp.data)) {
       const list = resp.data?.associations ?? resp.data;
       if (!Array.isArray(list)) {
-        console.warn("Unexpected associations response shape:", resp.data);
+        scopedLogger.warn("Unexpected associations response shape:", { data: resp.data });
         return undefined;
       }
       for (const a of list) {
@@ -459,10 +463,10 @@ export async function getAssociationIdBetween(
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     const axiosError = axios.isAxiosError(err) ? err : null;
-    console.error(
-      "Error fetching associations:",
-      axiosError?.response?.status ?? error.message
-    );
+    scopedLogger.error("Error fetching associations", {
+      status: axiosError?.response?.status,
+      message: error.message
+    });
     return undefined;
   }
 }
@@ -502,16 +506,26 @@ export async function createRelationBetweenRecords(
   firstRecordId: string,
   secondRecordId: string,
   privateToken: string,
-  locationId: string
+  locationId: string,
+  correlationId?: string
 ): Promise<{
   success: boolean;
   data?: unknown;
   error?: unknown;
   alreadyExists?: boolean;
 }> {
+  const scopedLogger = correlationId ? logger.withCorrelationId(correlationId) : logger;
+
   if (!associationId || !firstRecordId || !secondRecordId) {
     return { success: false, error: "missing associationId or record ids" };
   }
+
+  scopedLogger.debug("createRelationBetweenRecords called", {
+    associationId,
+    firstRecordId,
+    secondRecordId,
+    locationId
+  });
 
   const body = {
     locationId,
@@ -531,6 +545,7 @@ export async function createRelationBetweenRecords(
           "Content-Type": "application/json",
           Accept: "application/json",
         },
+        timeout: parseInt(process.env.TIMEOUT || "30000"),
       }
     );
 
@@ -567,10 +582,13 @@ export async function ensureContactPropertyAssociation(
   contactGhlId: string,
   propertyGhlId: string,
   privateToken: string,
-  locationId: string
+  locationId: string,
+  correlationId?: string
 ): Promise<void> {
+  const scopedLogger = correlationId ? logger.withCorrelationId(correlationId) : logger;
+
   if (!contactGhlId || !propertyGhlId) {
-    console.warn("Skipping association — missing GHL ids", {
+    scopedLogger.warn("Skipping association — missing GHL ids", {
       contactGhlId,
       propertyGhlId,
     });
@@ -581,13 +599,12 @@ export async function ensureContactPropertyAssociation(
     "contact",
     CUSTOM_OBJECT_KEY,
     privateToken,
-    locationId
+    locationId,
+    correlationId
   );
   if (!assocId) {
-    console.error(
-      "No association definition found for contact <",
-      CUSTOM_OBJECT_KEY,
-      ">"
+    scopedLogger.error(
+      `No association definition found for contact <${CUSTOM_OBJECT_KEY}>`
     );
     return;
   }
@@ -611,10 +628,9 @@ export async function ensureContactPropertyAssociation(
     }
   } catch (e) {
     const info = extractErrorInfo(e);
-    console.debug(
-      "Warning: local DB lookup for contact name failed:",
-      info.message
-    );
+    scopedLogger.debug("Warning: local DB lookup for contact name failed", {
+      message: info.message
+    });
   }
 
   if (!contactName) {
@@ -627,6 +643,7 @@ export async function ensureContactPropertyAssociation(
             Version: API_VERSION,
             Accept: "application/json",
           },
+          timeout: parseInt(process.env.TIMEOUT || "30000"),
         }
       );
 
@@ -644,10 +661,10 @@ export async function ensureContactPropertyAssociation(
         contactGhlId;
     } catch (err: unknown) {
       const info = extractErrorInfo(err);
-      console.debug(
-        "Warning: fetching contact from GHL failed:",
-        info.status ?? info.message ?? String(err)
-      );
+      scopedLogger.debug("Warning: fetching contact from GHL failed", {
+        status: info.status,
+        message: info.message ?? String(err)
+      });
       contactName = contactGhlId;
     }
   }
@@ -658,23 +675,25 @@ export async function ensureContactPropertyAssociation(
       contactGhlId,
       propertyGhlId,
       privateToken,
-      locationId
+      locationId,
+      correlationId
     );
 
     if (res?.success) {
-      logger.info("Associated contact with property", {
+      scopedLogger.info("Associated contact with property", {
         contactId: contactGhlId,
         propertyId: propertyGhlId,
       });
     } else {
-      console.error("❌ Could not create relation:", res?.error ?? res, {
+      scopedLogger.error("❌ Could not create relation", {
+        error: res?.error ?? res,
         contactGhlId,
         propertyGhlId,
       });
     }
   } catch (err: unknown) {
     const info = extractErrorInfo(err);
-    console.error("❌ Error creating relation:", {
+    scopedLogger.error("❌ Error creating relation", {
       status: info.status,
       data: info.data ?? info.message,
       contactName,
@@ -1103,6 +1122,7 @@ export async function findGhlContactByEmailOrPhone(
               locationId,
               email: normalizedEmail,
             },
+            timeout: parseInt(process.env.TIMEOUT || "30000"),
           }
         );
 
@@ -1149,6 +1169,7 @@ export async function findGhlContactByEmailOrPhone(
                 locationId,
                 email: email.trim(),
               },
+              timeout: parseInt(process.env.TIMEOUT || "30000"),
             }
           );
 
@@ -1175,6 +1196,7 @@ export async function findGhlContactByEmailOrPhone(
               locationId,
               number: normalizedPhone,
             },
+            timeout: parseInt(process.env.TIMEOUT || "30000"),
           }
         );
 
@@ -1221,6 +1243,7 @@ export async function findGhlContactByEmailOrPhone(
                 locationId,
                 number: phone.trim(),
               },
+              timeout: parseInt(process.env.TIMEOUT || "30000"),
             }
           );
 
@@ -1316,6 +1339,7 @@ export async function findGhlPropertyByAddress(
       },
       {
         headers,
+        timeout: parseInt(process.env.TIMEOUT || "30000"),
       }
     );
 
@@ -1376,6 +1400,7 @@ export async function findGhlPropertyByAddress(
         },
         {
           headers,
+          timeout: parseInt(process.env.TIMEOUT || "30000"),
         }
       );
 

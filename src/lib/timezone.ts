@@ -38,10 +38,8 @@ export function minutesUntilDeadline(): number {
   const now = DateTime.now().setZone(getRegionTimezone());
   const deadline = deadlineDateTime();
 
-  // If we're past 7 AM today, the deadline is tomorrow
-  const targetDeadline = now > deadline ? deadline.plus({ days: 1 }) : deadline;
-
-  const diff = targetDeadline.diff(now, "minutes");
+  // Calculate diff directly - will be negative if we are past the deadline
+  const diff = deadline.diff(now, "minutes");
   return Math.floor(diff.minutes);
 }
 

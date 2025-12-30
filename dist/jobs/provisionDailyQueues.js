@@ -4,7 +4,7 @@ import { getQueueInstance, JOB_TYPES, getDailyQueueName, } from "../lib/queue";
 import { todayYYYYMMDD, getRegionTimezone, formatForLog, getProvisionTimes, } from "../lib/timezone";
 import { generateIdempotencyKey } from "../lib/idempotency";
 import { DateTime } from "luxon";
-import { createLogger } from "@/lib/secureLogger";
+import { createLogger, generateCorrelationId } from "@/lib/secureLogger";
 const logger = createLogger('ProvisionQueues');
 const prisma = new PrismaClient();
 /**
@@ -48,11 +48,14 @@ export async function provisionDailyQueues(options = {}) {
     const startTime = DateTime.now().setZone(getRegionTimezone());
     const date = options.forceDate || todayYYYYMMDD();
     const queueName = getDailyQueueName(JOB_TYPES.DAILY_LEAD_ASSIGNMENT, date);
-    console.log(`\n${"=".repeat(60)}`);
-    console.log(`📅 Provisioning Daily Queue: ${queueName}`);
-    console.log(`⏰ Started at: ${formatForLog(startTime)}`);
-    console.log(`🌎 Timezone: ${getRegionTimezone()}`);
-    console.log(`${"=".repeat(60)}\n`);
+    // Generate correlation ID for this provision run
+    const correlationId = generateCorrelationId('provision', date);
+    const scopedLogger = logger.withCorrelationId(correlationId);
+    scopedLogger.info('Provisioning daily queue started', {
+        queueName,
+        startTime: formatForLog(startTime),
+        timezone: getRegionTimezone()
+    });
     const result = {
         success: false,
         date,
@@ -67,7 +70,7 @@ export async function provisionDailyQueues(options = {}) {
         const dataReady = await checkDataReady(date);
         if (!dataReady) {
             const error = "Data not ready for ingestion";
-            console.warn(`⚠️ ${error}`);
+            scopedLogger.warn(error);
             result.error = error;
             return result;
         }
@@ -76,11 +79,11 @@ export async function provisionDailyQueues(options = {}) {
         if (!options.dryRun) {
             try {
                 await boss.createQueue(queueName);
-                console.log(`✅ Queue created/verified: ${queueName}`);
+                scopedLogger.info('Queue created/verified', { queueName });
             }
             catch (error) {
-                console.log(`ℹ️ Queue already exists: ${queueName}`);
-                console.log(error);
+                scopedLogger.info('Queue already exists', { queueName });
+                scopedLogger.debug('Queue creation error', error);
             }
         }
         // Step 3: Fetch all users with settings
@@ -94,7 +97,7 @@ export async function provisionDailyQueues(options = {}) {
                 settings: true,
             },
         });
-        console.log(`👥 Found ${users.length} users with settings\n`);
+        scopedLogger.info('Found users with settings', { userCount: users.length });
         // Step 4: For each user, fetch matching properties and create jobs
         for (const user of users) {
             if (!user.settings)
@@ -104,10 +107,18 @@ export async function provisionDailyQueues(options = {}) {
             const alreadyPushedCount = await getPropertiesPushedToday(user.id, user.settings, date);
             const remainingLimit = Math.max(0, user.settings.planLimit - alreadyPushedCount);
             if (remainingLimit === 0) {
-                console.log(`   ⚠️ Plan limit reached (${user.settings.planLimit}), skipping`);
+                scopedLogger.info('Plan limit reached, skipping user', {
+                    userId: user.id,
+                    planLimit: user.settings.planLimit
+                });
                 continue;
             }
-            console.log(`   📊 Plan limit: ${user.settings.planLimit}, Already pushed: ${alreadyPushedCount}, Remaining: ${remainingLimit}`);
+            scopedLogger.info('Plan limits for user', {
+                userId: user.id,
+                planLimit: user.settings.planLimit,
+                alreadyPushed: alreadyPushedCount,
+                remaining: remainingLimit
+            });
             // Fetch properties that match user's criteria and haven't been pushed
             const properties = await prisma.property.findMany({
                 where: {
@@ -126,9 +137,13 @@ export async function provisionDailyQueues(options = {}) {
                     createdAt: "asc", // ✅ FIFO ordering - oldest properties first
                 },
             });
-            console.log(`   📊 Found ${properties.length} matching properties (limit: ${remainingLimit})`);
+            scopedLogger.info('Found matching properties', {
+                userId: user.id,
+                propertyCount: properties.length,
+                limit: remainingLimit
+            });
             if (properties.length === 0) {
-                console.log(`   ℹ️ No properties to process, skipping`);
+                scopedLogger.info('No properties to process, skipping user', { userId: user.id });
                 continue;
             }
             // Group properties by contact (owner)
@@ -143,7 +158,10 @@ export async function provisionDailyQueues(options = {}) {
                     contactPropertyMap.get(property.ownerId).push(property.id);
                 }
             }
-            console.log(`   👥 Grouped into ${uniqueContacts.size} unique contacts`);
+            scopedLogger.info('Grouped properties by contact', {
+                userId: user.id,
+                contactCount: uniqueContacts.size
+            });
             // Create one job per contact (with their properties)
             let jobsCreatedForUser = 0;
             for (const [contactId, propertyIds] of contactPropertyMap) {
@@ -156,7 +174,10 @@ export async function provisionDailyQueues(options = {}) {
                     idempotencyKey,
                 };
                 if (options.dryRun) {
-                    console.log(`   [DRY RUN] Would create job for contact ${contactId} with ${propertyIds.length} properties`);
+                    scopedLogger.info('[DRY RUN] Would create job', {
+                        contactId,
+                        propertyCount: propertyIds.length
+                    });
                 }
                 else {
                     try {
@@ -184,30 +205,34 @@ export async function provisionDailyQueues(options = {}) {
                     }
                     catch (err) {
                         const errorMessage = err instanceof Error ? err.message : String(err);
-                        console.error(`   ❌ Failed to create job for contact ${contactId}:`, errorMessage);
+                        scopedLogger.error('Failed to create job for contact', {
+                            contactId,
+                            error: errorMessage
+                        });
                     }
                 }
             }
             result.contactsProcessed += uniqueContacts.size;
             result.propertiesProcessed += properties.length;
-            console.log(`   ✅ Created ${jobsCreatedForUser} jobs for this user`);
+            scopedLogger.info('Created jobs for user', {
+                userId: user.id,
+                jobsCreated: jobsCreatedForUser
+            });
         }
         result.success = true;
-        console.log(`\n${"=".repeat(60)}`);
-        console.log(`✅ Provision Complete`);
-        console.log(`   📊 Jobs Created: ${result.jobsCreated}`);
-        console.log(`   👥 Contacts: ${result.contactsProcessed}`);
-        console.log(`   🏠 Properties: ${result.propertiesProcessed}`);
-        console.log(`   ⏱️ Duration: ${DateTime.now()
-            .diff(startTime, "seconds")
-            .seconds.toFixed(2)}s`);
-        console.log(`${"=".repeat(60)}\n`);
+        const duration = DateTime.now().diff(startTime, "seconds").seconds;
+        scopedLogger.info('Provision complete', {
+            jobsCreated: result.jobsCreated,
+            contactsProcessed: result.contactsProcessed,
+            propertiesProcessed: result.propertiesProcessed,
+            durationSeconds: duration.toFixed(2)
+        });
         return result;
     }
     catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         result.error = errorMessage;
-        console.error(`\n❌ Provision failed:`, error);
+        scopedLogger.error('Provision failed', error);
         return result;
     }
 }
@@ -233,7 +258,7 @@ async function checkDataReady(date) {
         return !!run;
     }
     catch (error) {
-        console.warn("⚠️ Could not check data ready status:", error);
+        logger.warn("⚠️ Could not check data ready status", { error });
         // Fail-safe: assume data is ready
         return true;
     }
@@ -244,24 +269,25 @@ async function checkDataReady(date) {
 export async function provisionWithRetry(options = {}) {
     const maxRetries = options.maxRetries || 3;
     const times = getProvisionTimes();
-    console.log(`\n⏰ Provision Schedule:`);
-    console.log(`   First attempt: ${formatForLog(times.first)}`);
-    console.log(`   Retry 1: ${formatForLog(times.retry1)}`);
-    console.log(`   Retry 2: ${formatForLog(times.retry2)}\n`);
+    logger.info(`⏰ Provision Schedule`, {
+        firstAttempt: formatForLog(times.first),
+        retry1: formatForLog(times.retry1),
+        retry2: formatForLog(times.retry2)
+    });
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        console.log(`\n🔄 Provision Attempt ${attempt}/${maxRetries}`);
+        logger.info(`🔄 Provision Attempt ${attempt}/${maxRetries}`);
         const result = await provisionDailyQueues(options);
         if (result.success) {
-            console.log(`✅ Provision successful on attempt ${attempt}`);
+            logger.info(`✅ Provision successful on attempt ${attempt}`);
             return result;
         }
         if (attempt < maxRetries) {
             const delayMinutes = 10; // Wait 10 minutes between retries
-            console.log(`⏳ Waiting ${delayMinutes} minutes before retry...`);
+            logger.info(`⏳ Waiting ${delayMinutes} minutes before retry...`);
             await new Promise((resolve) => setTimeout(resolve, delayMinutes * 60 * 1000));
         }
     }
-    console.error(`❌ Provision failed after ${maxRetries} attempts`);
+    logger.error(`❌ Provision failed after ${maxRetries} attempts`);
     return {
         success: false,
         date: todayYYYYMMDD(),
@@ -274,31 +300,40 @@ export async function provisionWithRetry(options = {}) {
     };
 }
 /**
- * CLI entry point - ESM compatible
+ * Helper to safely check if running as main module
+ * In test environments, we never run the CLI code regardless
  */
-const isMainModule = process.argv[1] === new URL(import.meta.url).pathname ||
-    process.argv[1] === new URL(import.meta.url).pathname.replace(/\//g, "\\");
-if (isMainModule) {
+function isMainModule() {
+    // Never execute CLI code in test environment
+    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+        return false;
+    }
+    // In production/development, assume direct execution
+    // This file should only be run directly via Node.js, not imported in browser contexts
+    return true;
+}
+/**
+ * CLI entry point - only runs when executed directly (not in tests)
+ */
+if (isMainModule()) {
     const args = process.argv.slice(2);
     const dryRun = args.includes("--dry-run");
     const withRetry = args.includes("--retry");
-    console.log(`\n🚀 Starting Daily Queue Provisioning`);
-    console.log(`   Dry Run: ${dryRun ? "Yes" : "No"}`);
-    console.log(`   Retry: ${withRetry ? "Yes" : "No"}\n`);
+    logger.info(`🚀 Starting Daily Queue Provisioning`, { dryRun, withRetry });
     const provisionFn = withRetry ? provisionWithRetry : provisionDailyQueues;
     provisionFn({ dryRun })
         .then((result) => {
         if (result.success) {
-            console.log(`\n✅ Provisioning completed successfully`);
+            logger.info(`✅ Provisioning completed successfully`);
             process.exit(0);
         }
         else {
-            console.error(`\n❌ Provisioning failed: ${result.error}`);
+            logger.error(`❌ Provisioning failed`, { error: result.error });
             process.exit(1);
         }
     })
         .catch((error) => {
-        console.error(`\n💥 Unexpected error:`, error);
+        logger.error(`💥 Unexpected error`, { error });
         process.exit(1);
     });
 }

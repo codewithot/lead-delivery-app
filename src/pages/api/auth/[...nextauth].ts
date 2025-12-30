@@ -109,7 +109,7 @@ export const authOptions: NextAuthOptions = {
           const userId = tokens.userId;
 
           if (!accessToken || !userId) {
-            console.error("[userinfo] Missing credentials:", {
+            logger.error("[userinfo] Missing credentials", {
               accessToken,
               userId,
             });
@@ -143,7 +143,7 @@ export const authOptions: NextAuthOptions = {
           } catch (err) {
             const errorMessage =
               err instanceof Error ? err.message : String(err);
-            console.error("[userinfo] JSON.parse failed:", text, errorMessage);
+            logger.error("[userinfo] JSON.parse failed", { text, error: errorMessage });
             throw err;
           }
 

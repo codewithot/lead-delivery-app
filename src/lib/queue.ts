@@ -26,7 +26,7 @@ export async function getQueueInstance(): Promise<PgBoss> {
 
 export async function closeQueue(): Promise<void> {
   if (boss) {
-    await boss.stop({ timeout: 30000 });
+    await boss.stop({ timeout: parseInt(process.env.TIMEOUT || "30000") });
     boss = null;
     console.log("✅ pg-boss stopped");
   }

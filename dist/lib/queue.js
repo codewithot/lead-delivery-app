@@ -20,7 +20,7 @@ export async function getQueueInstance() {
 }
 export async function closeQueue() {
     if (boss) {
-        await boss.stop({ timeout: 30000 });
+        await boss.stop({ timeout: parseInt(process.env.TIMEOUT || "30000") });
         boss = null;
         console.log("✅ pg-boss stopped");
     }

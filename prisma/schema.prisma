@@ -108,7 +108,7 @@ model ZipCode {
 model Property {
   id                     Int       @id @default(autoincrement())
   ownerId                Int
-  owner                  Contact   @relation(fields: [ownerId], references: [id], name: "ContactProperties")
+  owner   Contact @relation(fields: [ownerId], references: [id], name: "ContactProperties", onDelete: Cascade)
   ghlPropertyId          String?   @unique
   tags                   String?   @map("Tags")
   addressFull            String?   @map("Address (full)")
@@ -228,7 +228,7 @@ model Job {
 }
 
 model WebhookLog {
-  id           String        @id @default(cuid())
+  id           Int        @id @default(autoincrement())
   runId        Int?
   run          IngestionRun? @relation(fields: [runId], references: [id])
   direction    String
@@ -239,6 +239,7 @@ model WebhookLog {
   responseCode Int?
   responseBody Json?
   receivedAt   DateTime?
+  errorMessage String?
 }
 
 model IngestionRun {

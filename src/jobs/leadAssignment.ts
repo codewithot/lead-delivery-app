@@ -4,7 +4,7 @@ import { DailyLeadAssignmentPayload } from "../lib/queue";
 import { pushLeadsForUser } from "../lib/pushLeads";
 import type { Job } from "@prisma/client";
 import { Prisma } from "@prisma/client";
-import { createLogger } from "@/lib/secureLogger";
+import { createLogger, generateCorrelationId } from "@/lib/secureLogger";
 
 const logger = createLogger('LeadAssignment');
 const prisma = new PrismaClient();
@@ -16,7 +16,11 @@ const prisma = new PrismaClient();
 export async function processLeadAssignment(
   payload: DailyLeadAssignmentPayload
 ): Promise<void> {
-  logger.info("Processing lead assignment", {
+  // Generate correlation ID for this lead assignment
+  const correlationId = generateCorrelationId('lead-assignment', `${payload.contactId}-${payload.date}`);
+  const scopedLogger = logger.withCorrelationId(correlationId);
+
+  scopedLogger.info("Processing lead assignment", {
     contactId: payload.contactId,
     userId: payload.userId,
     propertyCount: payload.propertyIds.length,
@@ -43,15 +47,14 @@ export async function processLeadAssignment(
     });
 
     if (properties.length === 0) {
-      console.warn(
-        `⚠️ No properties found for IDs: ${payload.propertyIds.join(", ")}`
-      );
+      scopedLogger.warn('No properties found for IDs', { propertyIds: payload.propertyIds });
       return;
     }
 
-    console.log(
-      `✅ Found ${properties.length} properties for contact ${contact.id}`
-    );
+    scopedLogger.info('Found properties for contact', {
+      propertyCount: properties.length,
+      contactId: contact.id
+    });
 
     // Create a synthetic Job object for pushLeadsForUser
     const syntheticJob: Job = {
@@ -75,13 +78,13 @@ export async function processLeadAssignment(
       userId: payload.userId,
     };
 
-    // Call the existing push leads function
-    await pushLeadsForUser(syntheticJob);
+    // Call the existing push leads function with correlation ID
+    await pushLeadsForUser(syntheticJob, correlationId);
 
-    console.log(`✅ Successfully processed contact ${payload.contactId}`);
+    scopedLogger.info('Successfully processed contact', { contactId: payload.contactId });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error(`❌ Failed to process lead assignment:`, errorMessage);
+    scopedLogger.error('Failed to process lead assignment', errorMessage);
     throw error;
   }
 }

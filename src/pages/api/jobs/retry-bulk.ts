@@ -6,6 +6,9 @@ import { PrismaClient, Prisma } from "@prisma/client";
 import { getQueueInstance } from "@/lib/queue";
 import { isAdmin } from "@/lib/adminGuard";
 import { withRateLimit } from "@/lib/apiRateLimiter";
+import { createLogger } from "@/lib/secureLogger";
+
+const logger = createLogger('JobsRetryBulk');
 
 const prisma = new PrismaClient();
 
@@ -104,8 +107,9 @@ async function handler(
       }
     }
 
-    console.log(
-      `✅ Bulk retry completed: ${results.successful.length} successful, ${results.failed.length} failed`
+    logger.info(
+      `✅ Bulk retry completed`,
+      { successful: results.successful.length, failed: results.failed.length }
     );
 
     return res.status(200).json({
@@ -121,7 +125,7 @@ async function handler(
       },
     });
   } catch (error) {
-    console.error("Error in bulk retry:", error);
+    logger.error("Error in bulk retry", { error });
     return res.status(500).json({
       error: "Internal server error",
       message: error instanceof Error ? error.message : "Unknown error",
