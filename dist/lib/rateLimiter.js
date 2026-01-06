@@ -1,97 +1,182 @@
-import Bottleneck from "bottleneck";
+import { RateLimiterRedis, RateLimiterMemory, RateLimiterRes } from "rate-limiter-flexible";
+import Redis from "ioredis";
+// Track rate limiter stats
+let redisClient = null;
+let rateLimiter = null;
+let fallbackLimiter = null;
+let isRedisHealthy = false;
+/**
+ * Create in-memory rate limiter (used as fallback or primary when Redis disabled)
+ */
+function createMemoryLimiter() {
+    return new RateLimiterMemory({
+        keyPrefix: 'ghl-rate-limiter',
+        points: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
+        duration: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10) / 1000,
+        blockDuration: Math.floor(parseInt(process.env.TIMEOUT || "30000", 10) / 1000),
+    });
+}
 /**
  * Create rate limiter with optional Redis backend
- * Uses Redis for distributed rate limiting when RATE_LIMIT_ENABLED=true
+ * Automatically falls back to in-memory if Redis is unavailable
  */
 function createRateLimiter() {
+    // Always create a fallback in-memory limiter
+    fallbackLimiter = createMemoryLimiter();
     // Check if Redis-backed rate limiting is enabled
     const useRedis = process.env.RATE_LIMIT_ENABLED === 'true';
-    if (useRedis) {
-        console.log('✅ Creating Redis-backed rate limiter (distributed)');
-        // Build Redis client options based on your working test script
-        const clientOptions = {
+    if (!useRedis) {
+        console.log('⚠️  Creating in-memory rate limiter (Redis disabled)');
+        isRedisHealthy = false;
+        return fallbackLimiter;
+    }
+    console.log('✅ Creating Redis-backed rate limiter (distributed)');
+    try {
+        // Create Redis client with aggressive timeout for initial connection
+        redisClient = new Redis({
             host: process.env.REDIS_HOST || 'localhost',
             port: parseInt(process.env.REDIS_PORT || '6379', 10),
+            password: process.env.REDIS_PASSWORD,
+            tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
+            maxRetriesPerRequest: 3, // Reduced from default 20 to fail faster
             retryStrategy: (times) => {
+                if (times > 5) {
+                    console.log('⚠️  Redis connection failed after 5 attempts, falling back to in-memory');
+                    isRedisHealthy = false;
+                    return null; // Stop retrying
+                }
                 const delay = Math.min(times * 100, 2000);
                 console.log(`🔄 Redis retry attempt ${times}, waiting ${delay}ms`);
                 return delay;
             },
-        };
-        // Add password if provided (production has it, local doesn't)
-        if (process.env.REDIS_PASSWORD) {
-            clientOptions.password = process.env.REDIS_PASSWORD;
+            lazyConnect: false,
+            connectTimeout: 5000, // 5 second connection timeout
+            commandTimeout: 3000, // 3 second command timeout
+        });
+        console.log(`📡 Connecting to Redis at ${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || '6379'}`);
+        console.log(`🔒 TLS: ${process.env.REDIS_TLS === 'true' ? 'Enabled' : 'Disabled'}`);
+        console.log(`🔑 Auth: ${process.env.REDIS_PASSWORD ? 'Password Provided' : 'No Password'}`);
+        // Create rate limiter with Redis backend
+        const limiter = new RateLimiterRedis({
+            storeClient: redisClient,
+            keyPrefix: 'ghl-rate-limiter',
+            points: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
+            duration: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10) / 1000,
+            blockDuration: Math.floor(parseInt(process.env.TIMEOUT || "30000", 10) / 1000),
+            // Use in-memory fallback if Redis fails
+            insuranceLimiter: fallbackLimiter,
+        });
+        // Listen for Redis connection events
+        redisClient.on('connect', () => {
+            console.log('✅ Redis-backed rate limiter connected successfully');
+            isRedisHealthy = true;
+        });
+        redisClient.on('ready', () => {
+            isRedisHealthy = true;
+        });
+        redisClient.on('error', (err) => {
+            console.error('❌ Redis connection error:', err.message);
+            isRedisHealthy = false;
+            // Don't throw - let it fall back to in-memory
+        });
+        redisClient.on('close', () => {
+            console.log('⚠️  Redis connection closed');
+            isRedisHealthy = false;
+        });
+        redisClient.on('end', () => {
+            console.log('⚠️  Redis connection ended');
+            isRedisHealthy = false;
+        });
+        return limiter;
+    }
+    catch (error) {
+        console.error('❌ Failed to create Redis-backed limiter, falling back to in-memory:', error);
+        // Clean up failed Redis client
+        if (redisClient) {
+            redisClient.disconnect();
+            redisClient = null;
         }
-        // ⚠️ IMPORTANT: Only add tls if explicitly enabled
-        // Your test showed tls: undefined works, so we omit it when false
-        // This matches your working test configuration
-        if (process.env.REDIS_TLS === 'true') {
-            clientOptions.tls = {};
-        }
-        console.log(`📡 Connecting to Redis at ${clientOptions.host}:${clientOptions.port}`);
-        console.log(`🔒 TLS: ${clientOptions.tls ? 'Enabled' : 'Disabled'}`);
-        console.log(`🔑 Auth: ${clientOptions.password ? 'Password Provided' : 'No Password'}`);
+        isRedisHealthy = false;
+        return fallbackLimiter;
+    }
+}
+// Initialize the rate limiter
+rateLimiter = createRateLimiter();
+// Queue for managing concurrent requests
+class RequestQueue {
+    constructor(maxConcurrent) {
+        this.queue = [];
+        this.running = 0;
+        this.maxConcurrent = maxConcurrent;
+    }
+    async execute(fn) {
+        // Use the appropriate limiter
+        const limiterToUse = (isRedisHealthy && rateLimiter) ? rateLimiter : fallbackLimiter;
+        // Wait for rate limit
         try {
-            const limiter = new Bottleneck({
-                // Redis datastore configuration
-                datastore: 'ioredis',
-                clientOptions,
-                // Shared ID for distributed rate limiting across all workers
-                id: 'ghl-rate-limiter',
-                // Rate limit configuration (same as before)
-                maxConcurrent: parseInt(process.env.GHL_CONCURRENT_REQUESTS || '5', 10),
-                minTime: 1000 / parseInt(process.env.GHL_REQUESTS_PER_SECOND || '10', 10),
-                reservoir: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
-                reservoirRefreshAmount: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
-                reservoirRefreshInterval: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
-                // Timeout settings
-                timeout: parseInt(process.env.TIMEOUT || "30000"), // 30 second timeout for queued jobs
-            });
-            console.log('✅ Redis-backed rate limiter created successfully');
-            return limiter;
+            await limiterToUse.consume('global', 1);
         }
-        catch (error) {
-            console.error('❌ Failed to create Redis-backed limiter, falling back to in-memory:', error);
-            // Fall through to create in-memory limiter
+        catch (rejRes) {
+            if (rejRes instanceof RateLimiterRes) {
+                const msBeforeNext = rejRes.msBeforeNext || 1000;
+                console.warn(`⚠️ Rate limited, waiting ${msBeforeNext}ms before retry...`);
+                await new Promise(resolve => setTimeout(resolve, msBeforeNext));
+                // Retry after waiting
+                return this.execute(fn);
+            }
+            // If it's a Redis error, use fallback
+            if (rejRes instanceof Error && rejRes.message.includes('Redis')) {
+                console.warn('⚠️ Redis error in rate limiter, using fallback');
+                isRedisHealthy = false;
+                try {
+                    await fallbackLimiter.consume('global', 1);
+                }
+                catch (fallbackErr) {
+                    if (fallbackErr instanceof RateLimiterRes) {
+                        const msBeforeNext = fallbackErr.msBeforeNext || 1000;
+                        await new Promise(resolve => setTimeout(resolve, msBeforeNext));
+                        return this.execute(fn);
+                    }
+                    throw fallbackErr;
+                }
+            }
+            else {
+                throw rejRes;
+            }
+        }
+        // Wait for concurrency slot
+        if (this.running >= this.maxConcurrent) {
+            await new Promise(resolve => this.queue.push(resolve));
+        }
+        this.running++;
+        try {
+            return await fn();
+        }
+        finally {
+            this.running--;
+            const next = this.queue.shift();
+            if (next)
+                next();
         }
     }
-    // In-memory rate limiter (fallback or when Redis is disabled)
-    console.log('⚠️  Creating in-memory rate limiter (not distributed)');
-    return new Bottleneck({
-        maxConcurrent: parseInt(process.env.GHL_CONCURRENT_REQUESTS || '5', 10),
-        minTime: 1000 / parseInt(process.env.GHL_REQUESTS_PER_SECOND || '10', 10),
-        reservoir: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
-        reservoirRefreshAmount: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
-        reservoirRefreshInterval: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
-    });
 }
-// Create the global rate limiter instance
-const ghlLimiter = createRateLimiter();
-// Event handlers
-ghlLimiter.on("failed", async (error) => {
-    const status = error.response?.status;
-    if (status === 429) {
-        // Rate limited - retry after delay
-        console.warn(`⚠️ Rate limited, retrying in 60 seconds...`);
-        return 60000; // Wait 60 seconds before retry
-    }
-    // Don't retry for other errors
-    return undefined;
-});
-ghlLimiter.on("error", (error) => {
-    console.error("❌ Rate limiter error:", error);
-});
-// Optional: Log when jobs complete (helpful for debugging)
-if (process.env.NODE_ENV === 'development') {
-    ghlLimiter.on("done", (info) => {
-        console.log(`✅ Job completed | Retry count: ${info.retryCount}`);
-    });
-}
+const requestQueue = new RequestQueue(parseInt(process.env.GHL_CONCURRENT_REQUESTS || '5', 10));
 /**
- * Wrap an async function with rate limiting
- * Same API as before - your existing code doesn't need to change
+ * Wrap an async function with rate limiting and concurrency control
+ * Automatically falls back to in-memory rate limiting if Redis is unavailable
  */
 export async function rateLimitedRequest(fn) {
-    return ghlLimiter.schedule(fn);
+    return requestQueue.execute(fn);
 }
-export default ghlLimiter;
+// Cleanup function for graceful shutdown
+export async function closeRateLimiter() {
+    if (redisClient) {
+        await redisClient.quit();
+        redisClient = null;
+    }
+}
+// Export health check function
+export function isRateLimiterHealthy() {
+    return isRedisHealthy;
+}
+export default rateLimiter;

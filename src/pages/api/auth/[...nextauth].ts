@@ -57,7 +57,7 @@ export const authOptions: NextAuthOptions = {
         url: "https://marketplace.gohighlevel.com/oauth/chooselocation",
         params: {
           scope:
-            "contacts.write contacts.readonly locations/customValues.readonly locations/customValues.write locations/customFields.readonly locations/customFields.write locations.readonly opportunities.readonly opportunities.write calendars.readonly calendars.write users.readonly users.write oauth.write oauth.readonly",
+            "contacts.write contacts.readonly locations/customValues.readonly locations/customValues.write locations/customFields.readonly locations/customFields.write locations.readonly opportunities.readonly opportunities.write calendars.readonly calendars.write users.readonly users.write objects/schema.write objects/schema.readonly objects/record.readonly objects/record.write associations.readonly associations.write associations/relation.write",
           response_type: "code",
         },
       },

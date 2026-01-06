@@ -7,7 +7,6 @@ import {
   getTodayQueueName,
 } from "./queue";
 import {
-  PrismaClient,
   Job,
   Prisma,
   Property,
@@ -27,9 +26,10 @@ import { pushLeadsForUser } from "./pushLeads";
 import { sendJobFailureAlert } from "./alerts";
 import * as PgBoss from "pg-boss";
 import { createLogger } from "@/lib/secureLogger";
+import { prisma } from "@/lib/prisma";
+import { logWorkerEvent, logJobFailure } from "@/lib/fileLogger";
 
 const logger = createLogger('WorkerManager');
-const prisma = new PrismaClient();
 
 interface WorkerMetrics {
   jobsProcessed: number;
@@ -75,6 +75,7 @@ export class WorkerManager {
     }
 
     logger.info(`🚀 Worker ${this.workerId} starting...`);
+    logWorkerEvent(this.workerId, 'Worker starting', { queue: this.queueName, useDailyQueue: this.useDailyQueue });
 
     const targetQueue = this.useDailyQueue
       ? getTodayQueueName()
@@ -128,7 +129,7 @@ export class WorkerManager {
       `ℹ️  Worker ${this.workerId} using default pg-boss concurrency`
     );
     logger.info(`   Concurrency is controlled by total number of workers`);
-    logger.info(`✅ Worker ${this.workerId} is now processing jobs`);
+    logger.info(`✅ Worker ${this.workerId} ready to process jobs`);
   }
 
   private async processDailyLeadJob(
@@ -274,6 +275,7 @@ export class WorkerManager {
         `❌ Worker ${this.workerId} failed job ${job.id}:`,
         errorMessage
       );
+      logJobFailure(job.id, errorMessage, { workerId: this.workerId, type: 'daily-lead' });
 
       this.metrics.jobsFailed++;
 
@@ -425,9 +427,17 @@ export class WorkerManager {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       console.error(
-        `❌ Worker ${this.workerId} failed batch job ${job.id}:`,
-        errorMessage
+        `❌ Worker ${this.workerId} failed batch job ${job.id}:`
       );
+      console.error('Error details:', error);  // Full error object
+      if (error instanceof Error && error.stack) {
+        console.error('Stack trace:', error.stack);  // Stack trace for debugging
+      }
+      logJobFailure(job.id, errorMessage, {
+        workerId: this.workerId,
+        type: 'batch',
+        stack: error instanceof Error ? error.stack : undefined
+      });
 
       this.metrics.jobsFailed++;
 

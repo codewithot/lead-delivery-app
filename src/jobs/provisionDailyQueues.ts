@@ -1,5 +1,7 @@
 // src/jobs/provisionDailyQueues.ts
 import { PrismaClient, Prisma, UserSettings } from "@prisma/client";
+import { fileURLToPath } from "url";
+import { resolve } from "path";
 import {
   getQueueInstance,
   JOB_TYPES,
@@ -150,6 +152,18 @@ export async function provisionDailyQueues(
     // Step 4: For each user, fetch matching properties and create jobs
     for (const user of users) {
       if (!user.settings) continue;
+
+      // Skip users who haven't connected their GHL account yet
+      if (!user.locationId) {
+        scopedLogger.info('Skipping user without GHL locationId', { userId: user.id });
+        continue;
+      }
+
+      // Skip users without complete OAuth credentials
+      if (!user.accessToken || !user.refreshToken || !user.tokenExpiresAt) {
+        scopedLogger.info('Skipping user without complete GHL OAuth tokens', { userId: user.id });
+        continue;
+      }
 
       logger.info("Processing user", { userId: user.id });
 
@@ -399,17 +413,29 @@ export async function provisionWithRetry(
 
 /**
  * Helper to safely check if running as main module
- * In test environments, we never run the CLI code regardless
  */
 function isMainModule(): boolean {
-  // Never execute CLI code in test environment
-  if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+  // In Jest/test environment or browser, never treat as main module
+  if (typeof window !== 'undefined') return false;
+  if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) return false;
+
+  try {
+    // ESM environment - use import.meta.url
+    // This will throw in CJS/Jest environment
+    const url = (import.meta as { url?: string }).url;
+    if (!url) return false;
+
+    const scriptPath = fileURLToPath(url);
+
+    // Normalize paths for comparison (especially on Windows)
+    const normalizedScriptPath = resolve(scriptPath).toLowerCase();
+    const normalizedArgvPath = process.argv[1] ? resolve(process.argv[1]).toLowerCase() : '';
+
+    return normalizedScriptPath === normalizedArgvPath;
+  } catch {
+    // In CJS or environments where import.meta is not available
     return false;
   }
-
-  // In production/development, assume direct execution
-  // This file should only be run directly via Node.js, not imported in browser contexts
-  return true;
 }
 
 /**

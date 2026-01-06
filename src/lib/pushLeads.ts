@@ -1,5 +1,4 @@
 import {
-  PrismaClient,
   type Job,
   type UserSettings,
   type Property,
@@ -38,9 +37,10 @@ import {
 } from "./normalizers";
 import { Prisma } from "@prisma/client";
 import { createLogger } from "@/lib/secureLogger";
+import { logGHLError } from '@/lib/fileLogger';
+import { prisma } from "@/lib/prisma";
 
 const logger = createLogger('PushLeads');
-const prisma = new PrismaClient();
 const GHL_BASE_URL = "https://services.leadconnectorhq.com";
 const CUSTOM_OBJECT_KEY = "custom_objects.properties";
 const API_VERSION = "2021-07-28";
@@ -249,6 +249,17 @@ export async function pushLeadsForUser(job: Job, correlationId?: string) {
     }
   } else {
     // 🟠 OPTIMIZATION: Fetch ONLY IDs first to keep memory low
+    // Use batching if provided in payload to prevent duplicates across concurrent jobs
+    const batchSize = payload.batchSize || 100; // Default or from payload
+    const batchIndex = payload.batchIndex || 0;
+    const skip = batchIndex * batchSize;
+
+    // effectiveTake is min(totalToProcess, batchSize) because totalToProcess is the limit for this run
+    // actually totalToProcess calculation earlier already capped it by limit.
+    // simpler: just take batchSize, but we must respect the overall plan limit which totalToProcess represents?
+    // Wait, totalToProcess is calculated based on `pushed: false` count.
+
+    // If we use skip, we are assuming the order is stable (createdAt).
     const propRows = await prisma.property.findMany({
       where: {
         price: {
@@ -259,7 +270,8 @@ export async function pushLeadsForUser(job: Job, correlationId?: string) {
         pushed: false,
       },
       select: { id: true, ownerId: true },
-      take: totalToProcess,
+      take: batchSize, // Take only this batch's share
+      skip: skip,      // Skip previous batches
       orderBy: { createdAt: "asc" },
     });
 
@@ -396,10 +408,10 @@ export async function pushLeadsForUser(job: Job, correlationId?: string) {
     const tagsArray = buildTags(property.tags, null);
 
     const contactPayload: Record<string, unknown> = {
-      locationId: locationId,
+      locationId, // ✅ Required by GHL API
       firstName: contact.firstName ?? undefined,
       lastName: contact.lastName ?? undefined,
-      email: contact.email ?? undefined,
+      email: contact.email && contact.email.trim() ? contact.email : undefined,
       phone: contact.phone ?? undefined,
       address1: property.streetAddress ?? undefined,
       tags: (tagsArray?.length ?? 0) > 0 ? tagsArray : undefined,
@@ -681,23 +693,64 @@ export async function pushLeadsForUser(job: Job, correlationId?: string) {
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         if (err.response) {
-          console.error(`❌ GHL Error for contact ID ${contact.id}:`, {
+          const ghlErrorMsg = err.response.data?.message || err.response.data?.error || JSON.stringify(err.response.data);
+
+          // Handle duplicate contact - extract existing contact ID
+          if (err.response.status === 400 && err.response.data?.meta?.contactId) {
+            const existingContactId = err.response.data.meta.contactId;
+            scopedLogger.info('Contact already exists, using existing ID', {
+              localContactId: contact.id,
+              ghlContactId: existingContactId,
+              matchingField: err.response.data.meta.matchingField
+            });
+
+            contactIdMap[contact.id] = existingContactId;
+
+            // Update local DB with the existing GHL ID
+            await prisma.contact.update({
+              where: { id: contact.id },
+              data: {
+                ghlContactId: existingContactId,
+                pushed: true
+              },
+            });
+
+            pushedContactCount++;
+            continue; // Skip to next contact
+          }
+
+          // For other errors, log and continue
+          console.error(`❌ GHL API Error for contact ID ${contact.id}:`, {
             status: err.response.status,
+            statusText: err.response.statusText,
+            errorMessage: ghlErrorMsg,
             data: err.response.data,
-            headers: err.response.headers,
           });
+
+          // Log to file for later inspection
+          logGHLError(`Contact ${contact.id}`, {
+            status: err.response.status,
+            statusText: err.response.statusText,
+            errorMessage: ghlErrorMsg,
+            data: err.response.data,
+          });
+
+          // Don't throw - continue with other contacts
+          continue;
         } else {
           console.error(
             `❌ Network error for contact ID ${contact.id}:`,
             err.message
           );
+          continue;
         }
       } else {
-        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorDetails = err instanceof Error ? err.message : String(err);
         scopedLogger.error(
           `❌ Error pushing contact ID ${contact.id}`,
-          { error: errorMessage }
+          { error: errorDetails }
         );
+        continue;
       }
     }
   }
@@ -1046,23 +1099,33 @@ export async function pushLeadsForUser(job: Job, correlationId?: string) {
           );
         }
       } catch (err: unknown) {
+        let errorDetails = '';
         if (axios.isAxiosError(err)) {
           if (err.response) {
-            console.error(`❌ GHL Error for property ID ${p.id}:`, {
+            // Extract detailed error message from GHL response
+            const ghlErrorMsg = err.response.data?.message || err.response.data?.error || JSON.stringify(err.response.data);
+            errorDetails = `GHL ${err.response.status}: ${ghlErrorMsg}`;
+
+            console.error(`❌ GHL API Error for property ID ${p.id}:`, {
               status: err.response.status,
+              statusText: err.response.statusText,
+              address: p.addressFull,
+              errorMessage: ghlErrorMsg,
               data: err.response.data,
-              headers: err.response.headers,
             });
           } else {
+            errorDetails = `Network error: ${err.message}`;
             console.error(
               `❌ Network error for property ID ${p.id}:`,
               err.message
             );
           }
         } else {
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          scopedLogger.error(`❌ Error pushing property ID ${p.id}`, { error: errorMessage });
+          errorDetails = err instanceof Error ? err.message : String(err);
+          scopedLogger.error(`❌ Error pushing property ID ${p.id}`, { error: errorDetails });
         }
+        // Re-throw with detailed error for worker manager logging
+        throw new Error(`Failed to push property ${p.id} (${p.addressFull}): ${errorDetails}`);
       }
     }
 

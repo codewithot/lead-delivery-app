@@ -7,6 +7,22 @@ let boss: PgBoss | null = null;
 export async function getQueueInstance(): Promise<PgBoss> {
   if (boss) return boss;
 
+  // In test environment, don't actually start pg-boss to avoid processing real jobs
+  if (process.env.NODE_ENV === 'test') {
+    console.log('🧪 Test mode: Using mock pg-boss instance');
+    // Return a minimal mock that won't process real jobs
+    boss = {
+      start: async () => boss,
+      stop: async () => { },
+      send: async () => 'mock-job-id',
+      work: async () => 'mock-work-id',
+      createQueue: async () => { },
+      getQueueSize: async () => 0,
+      on: () => boss,
+    } as unknown as PgBoss;
+    return boss;
+  }
+
   boss = new PgBoss({
     connectionString: process.env.DATABASE_URL,
     schema: "pgboss",

@@ -27,78 +27,10 @@ const PROPERTIES_PER_BATCH = parseInt(
   10
 );
 
-async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
-  // Lazy initialize Prisma to allow for correct mocking in tests
-  if (!prisma) {
-    prisma = new PrismaClient();
-  }
-
-  // Extract or generate correlation ID
-  const correlationId =
-    (req.headers['x-correlation-id'] as string) ||
-    generateCorrelationId('webhook-ingest', Date.now());
+async function processWebhookData(validatedData: { runId: string, ingestedAt: string }, correlationId: string) {
   const scopedLogger = logger.withCorrelationId(correlationId);
 
-  scopedLogger.info('Webhook received');
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
   try {
-    const headers = req.headers;
-    const hookSecret = headers["x-hook-secret"];
-
-    if (!hookSecret || hookSecret !== process.env.WEBHOOK_SECRET) {
-      scopedLogger.info('Invalid or missing webhook secret');
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-
-    const body = req.body;
-    if (!body) {
-      scopedLogger.info('Empty request body');
-      return res.status(400).json({ error: "Request body is required" });
-    }
-
-    // Log the webhook
-    try {
-      await prisma.webhookLog.create({
-        data: {
-          direction: "incoming",
-          url: req.url!,
-          payload: req.body as Prisma.InputJsonValue,
-          headers: req.headers as Prisma.InputJsonValue,
-          receivedAt: new Date(),
-        },
-      });
-      scopedLogger.info('Webhook logged successfully');
-    } catch (logError) {
-      const logErrorMessage =
-        logError instanceof Error ? logError.message : String(logError);
-      scopedLogger.error("⚠️ Failed to log webhook", { error: logErrorMessage });
-    }
-
-    // Validate payload
-    let validatedData;
-    try {
-      validatedData = webhookSchema.parse(body);
-      scopedLogger.info('Payload validated', validatedData);
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      scopedLogger.error("❌ Validation failed", { error: errorMessage });
-      return res.status(400).json({
-        error: "Invalid payload format",
-        details: error instanceof Error ? error.message : "Validation failed",
-        received: body,
-      });
-    }
-
-    scopedLogger.info('Processing webhook', { runId: validatedData.runId });
-
     // Get queue instance
     const boss = await getQueueInstance();
 
@@ -113,7 +45,7 @@ async function handler(
       },
     });
 
-    logger.info(`📋 Found ${users.length} users to process`);
+    scopedLogger.info(`📋 Found ${users.length} users to process`);
 
     let totalJobsCreated = 0;
     let totalPropertiesFound = 0;
@@ -121,11 +53,11 @@ async function handler(
     // Create batched jobs for each user
     for (const user of users) {
       if (!user.settings) {
-        logger.info(`⚠️ User ${user.id} has no settings, skipping`);
+        scopedLogger.info(`⚠️ User ${user.id} has no settings, skipping`);
         continue;
       }
 
-      // ✅ NEW: Calculate remaining limit by checking already pushed today
+      // Calculate remaining limit by checking already pushed today
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
 
@@ -138,7 +70,7 @@ async function handler(
           },
           postalCode: { in: user.settings.zipCodes },
           pushedAt: {
-            gte: todayStart, // ✅ Use pushedAt field we just added
+            gte: todayStart,
           },
         },
       });
@@ -149,13 +81,13 @@ async function handler(
       );
 
       if (remainingLimit === 0) {
-        logger.info(
+        scopedLogger.info(
           `ℹ️  User ${user.id} has reached plan limit (${user.settings.planLimit})`
         );
         continue;
       }
 
-      logger.info(
+      scopedLogger.info(
         `👤 User ${user.id}: Plan limit ${user.settings.planLimit}, Already pushed: ${alreadyPushed}, Remaining: ${remainingLimit}`
       );
 
@@ -171,21 +103,21 @@ async function handler(
         },
       });
 
-      // ✅ Apply remaining limit
+      // Apply remaining limit
       const effectiveCount = Math.min(propertyCount, remainingLimit);
 
       if (effectiveCount === 0) {
-        logger.info(`ℹ️  User ${user.id} has no properties to push`);
+        scopedLogger.info(`ℹ️  User ${user.id} has no properties to push`);
         continue;
       }
 
       totalPropertiesFound += effectiveCount;
 
-      // Calculate number of batches based on effective count
+      // Calculate number of batches
       const batchCount = Math.ceil(effectiveCount / PROPERTIES_PER_BATCH);
 
-      logger.info(
-        `👤 User ${user.id}: ${effectiveCount} properties (limit: ${remainingLimit}) → ${batchCount} batches`
+      scopedLogger.info(
+        `👤 User ${user.id}: ${effectiveCount} properties → ${batchCount} batches`
       );
 
       // Create one job per batch
@@ -199,7 +131,6 @@ async function handler(
           totalBatches: batchCount,
         };
 
-        // Send to pg-boss queue
         const jobId = await boss.send(JOB_TYPES.DELIVER_LEADS_BATCH, payload, {
           singletonKey: `deliver-leads-batch-${user.id}-${validatedData.runId}-${batchIndex}`,
           retryLimit: 3,
@@ -215,7 +146,6 @@ async function handler(
           continue;
         }
 
-        // Create in database for tracking
         await prisma.job.create({
           data: {
             id: jobId,
@@ -229,71 +159,111 @@ async function handler(
         });
 
         totalJobsCreated++;
-        logger.info(
-          `✅ Created batch job ${batchIndex + 1}/${batchCount} for user ${user.id
-          }`
-        );
       }
     }
 
-    logger.info(`\n🎉 Job creation complete:`);
-    logger.info(`   📊 Properties found: ${totalPropertiesFound}`);
-    logger.info(`   📦 Jobs created: ${totalJobsCreated}`);
-    logger.info(`   👥 Users processed: ${users.length}\n`);
+    scopedLogger.info(`🎉 Job creation complete for Run ${validatedData.runId}`, {
+      propertiesFound: totalPropertiesFound,
+      jobsCreated: totalJobsCreated
+    });
 
-    // 🚀 Spawn worker process (if not using long-running workers)
     if (process.env.USE_STANDALONE_WORKERS === "true") {
-      logger.info("\n🔥 Spawning standalone worker process...\n");
-
       try {
-        const workerScript = path.join(
-          process.cwd(),
-          "dist",
-          "workers",
-          "standalone.js"
-        );
-
+        const workerScript = path.join(process.cwd(), "dist", "workers", "standalone.js");
         const workerProcess = spawn("node", [workerScript], {
           detached: true,
           stdio: "ignore",
-          env: {
-            ...process.env,
-            RUN_ID: validatedData.runId,
-            JOB_COUNT: String(totalJobsCreated),
-          },
+          env: { ...process.env, RUN_ID: validatedData.runId, JOB_COUNT: String(totalJobsCreated) },
         });
-
         workerProcess.unref();
-
-        logger.info(
-          `✅ Worker process spawned with PID: ${workerProcess.pid}\n`
-        );
       } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        logger.error("❌ Failed to spawn worker process", { error: errorMessage });
-        // Don't fail the webhook - jobs are queued
+        scopedLogger.error("❌ Failed to spawn worker process", { error: error instanceof Error ? error.message : String(error) });
       }
-    } else {
-      logger.info("ℹ️  Using long-running workers (not spawning)");
+    }
+  } catch (error) {
+    scopedLogger.error("💥 Error processing webhook background tasks", { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  if (!prisma) {
+    prisma = new PrismaClient();
+  }
+
+  const correlationId =
+    (req.headers['x-correlation-id'] as string) ||
+    generateCorrelationId('webhook-ingest', Date.now());
+  const scopedLogger = logger.withCorrelationId(correlationId);
+
+  scopedLogger.info('Webhook received');
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  try {
+    const hookSecret = req.headers["x-hook-secret"];
+    if (!hookSecret || hookSecret !== process.env.WEBHOOK_SECRET) {
+      scopedLogger.info('Invalid or missing webhook secret');
+      return res.status(401).json({ error: "Unauthorized" });
     }
 
-    return res.status(200).json({
+    const body = req.body;
+    if (!body) {
+      return res.status(400).json({ error: "Request body is required" });
+    }
+
+    // Standard Next.js behavior is to have the body parsed already
+    // but we log it first for auditability
+    try {
+      await prisma.webhookLog.create({
+        data: {
+          direction: "incoming",
+          url: req.url!,
+          payload: body as Prisma.InputJsonValue,
+          headers: req.headers as Prisma.InputJsonValue,
+          receivedAt: new Date(),
+        },
+      });
+    } catch (logError) {
+      scopedLogger.error("⚠️ Failed to log webhook", { error: logError instanceof Error ? logError.message : String(logError) });
+    }
+
+    // Validate payload
+    const result = webhookSchema.safeParse(body);
+    if (!result.success) {
+      return res.status(400).json({
+        error: "Invalid payload format",
+        details: result.error.message,
+      });
+    }
+
+    const validatedData = result.data;
+    scopedLogger.info('Payload validated, responding immediately', { runId: validatedData.runId });
+
+    // 🚀 RESPOND IMMEDIATELY TO PREVENT TIMEOUTS
+    res.status(200).json({
       success: true,
-      runId: validatedData.runId,
-      message: "Webhook processed successfully with batched jobs",
-      jobsCreated: totalJobsCreated,
-      propertiesFound: totalPropertiesFound,
-      totalUsers: users.length,
-      batchSize: PROPERTIES_PER_BATCH,
+      message: "Webhook accepted for background processing",
+      runId: validatedData.runId
     });
+
+    // ⚡️ TRIGGER BACKGROUND PROCESSING
+    // Note: In long-running processes (like local dev), this works fine.
+    // In serverless, you would use a queue or a separate lambda.
+    setImmediate(() => {
+      processWebhookData(validatedData, correlationId);
+    });
+
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    scopedLogger.error("💥 Unexpected error", { error: errorMessage });
-    return res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : "Unknown error",
-    });
+    scopedLogger.error("💥 Unexpected webhook error", { error: errorMessage });
+    if (!res.writableEnded) {
+      return res.status(500).json({ error: "Internal server error" });
+    }
   }
 }
 

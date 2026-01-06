@@ -87,9 +87,13 @@ export default function DashboardPage() {
     }
   }, [session]);
 
+  // ✅ NEW: Loading state for connection
+  const [isConnecting, setIsConnecting] = React.useState(false);
+
   // Helper for GHL connection
   const handleConnectGHL = () => {
-    signIn("gh", { callbackUrl: "/dashboard" });
+    setIsConnecting(true);
+    signIn("gh", { callbackUrl: "/dashboard" }).catch(() => setIsConnecting(false));
   };
 
   const { data: jobs, error: jobsError } = useSWR<Job[]>(
@@ -98,12 +102,18 @@ export default function DashboardPage() {
   );
 
   // ✅ NEW: Fetch plan usage data
-  const { data: planUsage } = useSWR<PlanUsage>(
+  const { data: planUsage, error: planUsageError } = useSWR<PlanUsage>(
     status === "authenticated" ? "/api/plan-usage" : null,
     fetcher,
     {
       refreshInterval: 30000, // Refresh every 30 seconds
     }
+  );
+
+  // ✅ NEW: Check if user has valid GHL tokens
+  const { data: tokenStatus } = useSWR<{ hasTokens: boolean; hasLocationId: boolean; needsReauth: boolean }>(
+    status === "authenticated" ? "/api/auth/check-tokens" : null,
+    fetcher
   );
 
   useEffect(() => {
@@ -200,8 +210,8 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* GHL Connection Prompt for First-Time Users */}
-        {!session?.user?.locationId && (
+        {/* GHL Connection Prompt - Show if tokens are missing */}
+        {tokenStatus?.needsReauth && (
           <div className="glass-panel p-8 rounded-2xl border border-blue-500/30 bg-blue-500/5 animate-pulse-subtle">
             <div className="flex flex-col md:flex-row items-center gap-6">
               <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-lg shadow-blue-500/20">
@@ -210,18 +220,64 @@ export default function DashboardPage() {
                 </svg>
               </div>
               <div className="flex-1 text-center md:text-left">
-                <h2 className="text-xl font-bold text-white mb-2">Connect Your GoHighLevel Account</h2>
+                <h2 className="text-xl font-bold text-white mb-2">
+                  {tokenStatus?.hasLocationId ? 'Re-authenticate with GoHighLevel' : 'Connect Your GoHighLevel Account'}
+                </h2>
                 <p className="text-gray-400 max-w-2xl">
-                  To start receiving automated real-estate leads, you need to connect your GoHighLevel sub-account.
-                  This is a one-time setup that ensures seamless lead delivery directly to your CRM.
+                  {tokenStatus?.hasLocationId
+                    ? 'Your GoHighLevel authentication has expired or been revoked. Please re-authenticate to continue receiving leads.'
+                    : 'To start receiving automated real-estate leads, you need to connect your GoHighLevel sub-account. This is a one-time setup that ensures seamless lead delivery directly to your CRM.'
+                  }
                 </p>
               </div>
               <button
                 onClick={handleConnectGHL}
-                className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] hover:shadow-[0_0_30px_rgba(37,99,235,0.5)] transform hover:-translate-y-1"
+                disabled={isConnecting}
+                className={`px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] hover:shadow-[0_0_30px_rgba(37,99,235,0.5)] transform hover:-translate-y-1 flex items-center gap-2 ${isConnecting ? 'opacity-75 cursor-wait' : ''}`}
               >
-                Connect Now
+                {isConnecting ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Connecting...
+                  </>
+                ) : (
+                  tokenStatus?.hasLocationId ? 'Re-authenticate' : 'Connect Now'
+                )}
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Settings Configuration Prompt - Show if user has GHL connected but no settings */}
+        {planUsageError && tokenStatus?.hasTokens && !tokenStatus?.needsReauth && (
+          <div className="glass-panel p-8 rounded-2xl border border-yellow-500/30 bg-yellow-500/5 animate-pulse-subtle">
+            <div className="flex flex-col md:flex-row items-center gap-6">
+              <div className="w-16 h-16 bg-yellow-600 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-lg shadow-yellow-500/20">
+                <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </div>
+              <div className="flex-1 text-center md:text-left">
+                <h2 className="text-xl font-bold text-white mb-2">
+                  Configure Your Lead Preferences
+                </h2>
+                <p className="text-gray-400 max-w-2xl">
+                  To start receiving leads, you need to configure your preferences. Set your target ZIP codes, price range, and daily limit to match your business needs.
+                </p>
+              </div>
+              <Link
+                href="/settings"
+                className="px-8 py-4 bg-yellow-600 hover:bg-yellow-700 text-white font-bold rounded-xl transition-all shadow-[0_0_20px_rgba(202,138,4,0.3)] hover:shadow-[0_0_30px_rgba(202,138,4,0.5)] transform hover:-translate-y-1 flex items-center gap-2"
+              >
+                Go to Settings
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </Link>
             </div>
           </div>
         )}

@@ -411,10 +411,11 @@ export async function getAssociationIdBetween(
   const scopedLogger = correlationId ? logger.withCorrelationId(correlationId) : logger;
 
   try {
+    const url = `${GHL_BASE_URL}/associations/objectKey/${encodeURIComponent(firstObjectKey)}`;
+    // scopedLogger.debug("Fetching associations", { url, locationId });
+
     const resp = await axios.get(
-      `${GHL_BASE_URL}/associations/objectKey/${encodeURIComponent(
-        firstObjectKey
-      )}`,
+      url,
       {
         headers: {
           Authorization: `Bearer ${privateToken}`,
@@ -465,7 +466,8 @@ export async function getAssociationIdBetween(
     const axiosError = axios.isAxiosError(err) ? err : null;
     scopedLogger.error("Error fetching associations", {
       status: axiosError?.response?.status,
-      message: error.message
+      message: error.message,
+      data: axiosError?.response?.data
     });
     return undefined;
   }

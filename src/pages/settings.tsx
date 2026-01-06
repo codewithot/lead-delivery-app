@@ -1,7 +1,7 @@
 
 import { GetServerSideProps } from "next";
 import { getSession } from "next-auth/react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import useSWR from "swr";
 import { useRouter } from "next/router";
 import Layout from "../components/Layout";
@@ -36,6 +36,24 @@ export default function SettingsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
+  // Fetch current settings
+  const { data: userSettings } = useSWR('/api/user-settings', fetcher);
+
+  // Initialize form when settings are loaded
+  useEffect(() => {
+    if (userSettings) {
+      if (userSettings.radius) setRadius(userSettings.radius);
+      if (userSettings.priceMin !== undefined) setPriceMin(userSettings.priceMin);
+      if (userSettings.priceMax !== undefined) setPriceMax(userSettings.priceMax);
+      if (userSettings.zipCodes) {
+        setSelectedZips(userSettings.zipCodes);
+        // Note: We do NOT set the central ZIP field here
+        // The central ZIP is for searching, not for displaying saved ZIPs
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userSettings]); // Run once when settings load
+
   const { data: nearbyZips, error } = useSWR(
     zip ? `/api/zipcodes?zip=${zip}&radius=${radius}` : null,
     fetcher
@@ -56,6 +74,16 @@ export default function SettingsPage() {
     }
   };
 
+  const handleReset = () => {
+    if (confirm("Are you sure you want to reset all settings to default keys?")) {
+      setZip("");
+      setRadius(10);
+      setPriceMin(0);
+      setPriceMax(1000000);
+      setSelectedZips([]);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
@@ -65,10 +93,10 @@ export default function SettingsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         zipCodes: selectedZips,
-        radius,
-        priceMin,
-        priceMax,
-        planLimit,
+        radius: Number(radius) || 10,
+        priceMin: Number(priceMin) || 0,
+        priceMax: Number(priceMax) || 0,
+        planLimit: Number(userSettings?.planLimit) || Number(planLimit) || 100, // Preserve existing limit or default
       }),
     });
 
@@ -172,7 +200,8 @@ export default function SettingsPage() {
                   <label className="block text-sm font-medium text-gray-400 mb-2">Minimum Price ($)</label>
                   <input
                     type="number"
-                    value={priceMin}
+                    value={priceMin || ''}
+                    placeholder="0"
                     onChange={(e) => setPriceMin(Number(e.target.value))}
                     className="w-full bg-black/40 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all"
                   />
@@ -181,8 +210,14 @@ export default function SettingsPage() {
                   <label className="block text-sm font-medium text-gray-400 mb-2">Maximum Price ($)</label>
                   <input
                     type="number"
-                    value={priceMax}
-                    onChange={(e) => setPriceMax(Number(e.target.value))}
+                    value={priceMax || ''}
+                    placeholder="No Limit"
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      // Prevent Postgres INT overflow (max ~2.14B)
+                      if (val > 2147483647) return;
+                      setPriceMax(val);
+                    }}
                     className="w-full bg-black/40 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all"
                   />
                 </div>
@@ -205,7 +240,14 @@ export default function SettingsPage() {
             </div>
 
             {/* Actions */}
-            <div className="pt-6 border-t border-gray-800 flex justify-end">
+            <div className="pt-6 border-t border-gray-800 flex justify-end gap-4">
+              <button
+                type="button"
+                onClick={handleReset}
+                className="px-6 py-3 bg-transparent hover:bg-white/5 text-gray-400 hover:text-white font-medium rounded-xl border border-transparent hover:border-gray-700 transition-all"
+              >
+                Reset Defaults
+              </button>
               <button
                 type="submit"
                 disabled={isSaving}

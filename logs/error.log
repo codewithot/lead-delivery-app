@@ -1,0 +1,84 @@
+[2026-01-06 05:20:56.180] [ERROR] Job Failed: b6eb5680-7c48-4c26-910a-6677daafa7cc
+{
+  "error": "User has no GHL locationId configured",
+  "workerId": 3,
+  "type": "batch",
+  "stack": "Error: User has no GHL locationId configured\n    at pushLeadsForUser (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\pushLeads.ts:153:11)\n    at async WorkerManager.pushPropertiesBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:595:5)\n    at async WorkerManager.processBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:561:5)\n    at async WorkerManager.processBatchJob (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:408:7)\n    at async <anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:104:11)\n    at async resolveWithinSeconds (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\tools.ts:50:14)\n    at async Worker.onFetch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\manager.ts:171:24)\n    at async Worker.start (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\worker.ts:79:11)"
+}
+[2026-01-06 05:20:57.436] [ERROR] Job Failed: 3e989037-f1ef-4c07-b027-db7c7e8a869c
+{
+  "error": "Missing stored GHL credentials—accessToken, refreshToken or expiry.",
+  "workerId": 1,
+  "type": "batch",
+  "stack": "Error: Missing stored GHL credentials—accessToken, refreshToken or expiry.\n    at getValidAccessToken (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\ghlClient.ts:19:11)\n    at pushLeadsForUser (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\pushLeads.ts:156:29)\n    at async WorkerManager.pushPropertiesBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:595:5)\n    at async WorkerManager.processBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:561:5)\n    at async WorkerManager.processBatchJob (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:408:7)\n    at async <anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:104:11)\n    at async resolveWithinSeconds (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\tools.ts:50:14)\n    at async Worker.onFetch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\manager.ts:171:24)\n    at async Worker.start (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\worker.ts:79:11)"
+}
+[2026-01-06 05:21:04.935] [ERROR] Job Failed: 08efe223-1259-4395-b900-49f4f7611971
+{
+  "error": "Reached the max retries per request limit (which is 20). Refer to \"maxRetriesPerRequest\" option for details.",
+  "workerId": 2,
+  "type": "batch",
+  "stack": "MaxRetriesPerRequestError: Reached the max retries per request limit (which is 20). Refer to \"maxRetriesPerRequest\" option for details.\n    at Socket.<anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\ioredis\\built\\redis\\event_handler.js:207:37)\n    at Object.onceWrapper (node:events:639:26)\n    at Socket.emit (node:events:524:28)\n    at TCP.<anonymous> (node:net:351:12)"
+}
+[2026-01-06 05:22:03.275] [ERROR] Job Failed: b6eb5680-7c48-4c26-910a-6677daafa7cc
+{
+  "error": "User has no GHL locationId configured",
+  "workerId": 1,
+  "type": "batch",
+  "stack": "Error: User has no GHL locationId configured\n    at pushLeadsForUser (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\pushLeads.ts:153:11)\n    at async WorkerManager.pushPropertiesBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:595:5)\n    at async WorkerManager.processBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:561:5)\n    at async WorkerManager.processBatchJob (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:408:7)\n    at async <anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:104:11)\n    at async resolveWithinSeconds (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\tools.ts:50:14)\n    at async Worker.onFetch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\manager.ts:171:24)\n    at async Worker.start (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\worker.ts:79:11)"
+}
+[2026-01-06 05:22:04.676] [ERROR] Job Failed: 3e989037-f1ef-4c07-b027-db7c7e8a869c
+{
+  "error": "Missing stored GHL credentials—accessToken, refreshToken or expiry.",
+  "workerId": 3,
+  "type": "batch",
+  "stack": "Error: Missing stored GHL credentials—accessToken, refreshToken or expiry.\n    at getValidAccessToken (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\ghlClient.ts:19:11)\n    at pushLeadsForUser (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\pushLeads.ts:156:29)\n    at async WorkerManager.pushPropertiesBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:595:5)\n    at async WorkerManager.processBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:561:5)\n    at async WorkerManager.processBatchJob (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:408:7)\n    at async <anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:104:11)\n    at async resolveWithinSeconds (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\tools.ts:50:14)\n    at async Worker.onFetch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\manager.ts:171:24)\n    at async Worker.start (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\worker.ts:79:11)"
+}
+[2026-01-06 05:22:30.085] [ERROR] Job Failed: 08efe223-1259-4395-b900-49f4f7611971
+{
+  "error": "Reached the max retries per request limit (which is 20). Refer to \"maxRetriesPerRequest\" option for details.",
+  "workerId": 2,
+  "type": "batch",
+  "stack": "MaxRetriesPerRequestError: Reached the max retries per request limit (which is 20). Refer to \"maxRetriesPerRequest\" option for details.\n    at Socket.<anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\ioredis\\built\\redis\\event_handler.js:207:37)\n    at Object.onceWrapper (node:events:639:26)\n    at Socket.emit (node:events:524:28)\n    at TCP.<anonymous> (node:net:351:12)"
+}
+[2026-01-06 05:23:21.229] [ERROR] Job Failed: b6eb5680-7c48-4c26-910a-6677daafa7cc
+{
+  "error": "User has no GHL locationId configured",
+  "workerId": 3,
+  "type": "batch",
+  "stack": "Error: User has no GHL locationId configured\n    at pushLeadsForUser (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\pushLeads.ts:153:11)\n    at async WorkerManager.pushPropertiesBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:595:5)\n    at async WorkerManager.processBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:561:5)\n    at async WorkerManager.processBatchJob (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:408:7)\n    at async <anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:104:11)\n    at async resolveWithinSeconds (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\tools.ts:50:14)\n    at async Worker.onFetch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\manager.ts:171:24)\n    at async Worker.start (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\worker.ts:79:11)"
+}
+[2026-01-06 05:23:22.376] [ERROR] Job Failed: 3e989037-f1ef-4c07-b027-db7c7e8a869c
+{
+  "error": "Missing stored GHL credentials—accessToken, refreshToken or expiry.",
+  "workerId": 6,
+  "type": "batch",
+  "stack": "Error: Missing stored GHL credentials—accessToken, refreshToken or expiry.\n    at getValidAccessToken (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\ghlClient.ts:19:11)\n    at pushLeadsForUser (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\pushLeads.ts:156:29)\n    at async WorkerManager.pushPropertiesBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:595:5)\n    at async WorkerManager.processBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:561:5)\n    at async WorkerManager.processBatchJob (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:408:7)\n    at async <anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:104:11)\n    at async resolveWithinSeconds (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\tools.ts:50:14)\n    at async Worker.onFetch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\manager.ts:171:24)\n    at async Worker.start (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\worker.ts:79:11)"
+}
+[2026-01-06 05:23:54.499] [ERROR] Job Failed: 08efe223-1259-4395-b900-49f4f7611971
+{
+  "error": "Reached the max retries per request limit (which is 20). Refer to \"maxRetriesPerRequest\" option for details.",
+  "workerId": 3,
+  "type": "batch",
+  "stack": "MaxRetriesPerRequestError: Reached the max retries per request limit (which is 20). Refer to \"maxRetriesPerRequest\" option for details.\n    at Socket.<anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\ioredis\\built\\redis\\event_handler.js:207:37)\n    at Object.onceWrapper (node:events:639:26)\n    at Socket.emit (node:events:524:28)\n    at TCP.<anonymous> (node:net:351:12)"
+}
+[2026-01-06 05:24:41.768] [ERROR] Job Failed: 3e989037-f1ef-4c07-b027-db7c7e8a869c
+{
+  "error": "Missing stored GHL credentials—accessToken, refreshToken or expiry.",
+  "workerId": 1,
+  "type": "batch",
+  "stack": "Error: Missing stored GHL credentials—accessToken, refreshToken or expiry.\n    at getValidAccessToken (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\ghlClient.ts:19:11)\n    at pushLeadsForUser (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\pushLeads.ts:156:29)\n    at async WorkerManager.pushPropertiesBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:595:5)\n    at async WorkerManager.processBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:561:5)\n    at async WorkerManager.processBatchJob (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:408:7)\n    at async <anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:104:11)\n    at async resolveWithinSeconds (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\tools.ts:50:14)\n    at async Worker.onFetch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\manager.ts:171:24)\n    at async Worker.start (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\worker.ts:79:11)"
+}
+[2026-01-06 05:24:42.726] [ERROR] Job Failed: b6eb5680-7c48-4c26-910a-6677daafa7cc
+{
+  "error": "User has no GHL locationId configured",
+  "workerId": 5,
+  "type": "batch",
+  "stack": "Error: User has no GHL locationId configured\n    at pushLeadsForUser (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\pushLeads.ts:153:11)\n    at async WorkerManager.pushPropertiesBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:595:5)\n    at async WorkerManager.processBatch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:561:5)\n    at async WorkerManager.processBatchJob (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:408:7)\n    at async <anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\src\\lib\\workerManager.ts:104:11)\n    at async resolveWithinSeconds (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\tools.ts:50:14)\n    at async Worker.onFetch (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\manager.ts:171:24)\n    at async Worker.start (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\pg-boss\\src\\worker.ts:79:11)"
+}
+[2026-01-06 05:25:18.966] [ERROR] Job Failed: 08efe223-1259-4395-b900-49f4f7611971
+{
+  "error": "Reached the max retries per request limit (which is 20). Refer to \"maxRetriesPerRequest\" option for details.",
+  "workerId": 2,
+  "type": "batch",
+  "stack": "MaxRetriesPerRequestError: Reached the max retries per request limit (which is 20). Refer to \"maxRetriesPerRequest\" option for details.\n    at Socket.<anonymous> (C:\\Users\\DELL Latitude 7400\\Documents\\PRO-EDGE\\lead-delivery-app\\node_modules\\ioredis\\built\\redis\\event_handler.js:207:37)\n    at Object.onceWrapper (node:events:639:26)\n    at Socket.emit (node:events:524:28)\n    at TCP.<anonymous> (node:net:351:12)"
+}

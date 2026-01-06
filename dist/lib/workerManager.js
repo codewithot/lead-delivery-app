@@ -1,6 +1,5 @@
 // src/lib/workerManager.ts - WITH ALERT INTEGRATION
 import { getQueueInstance, JOB_TYPES, getTodayQueueName, } from "./queue";
-import { PrismaClient, } from "@prisma/client";
 import { setupMemoryMonitoring } from "./monitoring";
 import { EventEmitter } from "events";
 import { updateJobProgress } from "./jobProgress";
@@ -8,8 +7,9 @@ import { checkAndClaimIdempotency, markIdempotencyCompleted, markIdempotencyFail
 import { pushLeadsForUser } from "./pushLeads";
 import { sendJobFailureAlert } from "./alerts";
 import { createLogger } from "@/lib/secureLogger";
+import { prisma } from "@/lib/prisma";
+import { logWorkerEvent, logJobFailure } from "@/lib/fileLogger";
 const logger = createLogger('WorkerManager');
-const prisma = new PrismaClient();
 export class WorkerManager {
     constructor(config, eventEmitter) {
         this.isRunning = false;
@@ -32,6 +32,7 @@ export class WorkerManager {
             return;
         }
         logger.info(`🚀 Worker ${this.workerId} starting...`);
+        logWorkerEvent(this.workerId, 'Worker starting', { queue: this.queueName, useDailyQueue: this.useDailyQueue });
         const targetQueue = this.useDailyQueue
             ? getTodayQueueName()
             : this.queueName;
@@ -65,7 +66,7 @@ export class WorkerManager {
         }
         logger.info(`ℹ️  Worker ${this.workerId} using default pg-boss concurrency`);
         logger.info(`   Concurrency is controlled by total number of workers`);
-        logger.info(`✅ Worker ${this.workerId} is now processing jobs`);
+        logger.info(`✅ Worker ${this.workerId} ready to process jobs`);
     }
     async processDailyLeadJob(job) {
         this.activeJobs++;
@@ -173,6 +174,7 @@ export class WorkerManager {
         catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             console.error(`❌ Worker ${this.workerId} failed job ${job.id}:`, errorMessage);
+            logJobFailure(job.id, errorMessage, { workerId: this.workerId, type: 'daily-lead' });
             this.metrics.jobsFailed++;
             // ========================================================================
             // ✅ NEW: Alert integration - Get current job attempt count
@@ -294,7 +296,16 @@ export class WorkerManager {
         }
         catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`❌ Worker ${this.workerId} failed batch job ${job.id}:`, errorMessage);
+            console.error(`❌ Worker ${this.workerId} failed batch job ${job.id}:`);
+            console.error('Error details:', error); // Full error object
+            if (error instanceof Error && error.stack) {
+                console.error('Stack trace:', error.stack); // Stack trace for debugging
+            }
+            logJobFailure(job.id, errorMessage, {
+                workerId: this.workerId,
+                type: 'batch',
+                stack: error instanceof Error ? error.stack : undefined
+            });
             this.metrics.jobsFailed++;
             // ========================================================================
             // ✅ NEW: Alert integration - Get current job attempt count
