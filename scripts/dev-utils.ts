@@ -116,6 +116,41 @@ async function resetFailedJobs() {
     console.log('🎯 Workers should pick them up shortly!\\n');
 }
 
+async function purgeAllJobs() {
+    console.log('🗑️  PURGING all jobs from pg-boss and Job table...\\n');
+    console.log('⚠️  This will permanently DELETE all jobs!\\n');
+
+    // 1. Delete all pg-boss jobs
+    console.log('📋 Step 1: Deleting ALL pg-boss jobs...');
+    const pgBossDeleteResult = await prisma.$executeRawUnsafe(`
+        DELETE FROM pgboss.job 
+        WHERE name = 'deliver-leads-batch' 
+           OR name LIKE 'leads_assign%'
+    `);
+    console.log(`   ✅ Deleted ${pgBossDeleteResult} jobs from pg-boss queue\\n`);
+
+    // 2. Also clean up archive table (may not exist in all pg-boss versions)
+    console.log('📋 Step 2: Cleaning pg-boss archive...');
+    try {
+        const archiveResult = await prisma.$executeRawUnsafe(`
+            DELETE FROM pgboss.archive 
+            WHERE name = 'deliver-leads-batch' 
+               OR name LIKE 'leads_assign%'
+        `);
+        console.log(`   ✅ Cleaned ${archiveResult} jobs from pg-boss archive\\n`);
+    } catch {
+        console.log('   ⏭️  Archive table does not exist, skipping...\\n');
+    }
+
+    // 3. Delete all Job table entries
+    console.log('📋 Step 3: Deleting ALL jobs from Job table...');
+    const jobDeleteResult = await prisma.job.deleteMany({});
+    console.log(`   ✅ Deleted ${jobDeleteResult.count} jobs from Job table\\n`);
+
+    console.log('✅ All jobs have been PURGED!');
+    console.log('🎯 Fresh start - no pending jobs.\\n');
+}
+
 // ============================================================================
 // PROPERTY UTILITIES
 // ============================================================================
@@ -397,6 +432,9 @@ async function main() {
             case 'data:duplicates':
                 await fixDuplicates();
                 break;
+            case 'jobs:purge':
+                await purgeAllJobs();
+                break;
             default:
                 console.log(`
 ❌ Unknown command: ${command || '(none)'}
@@ -407,6 +445,7 @@ Available commands:
   jobs:status          - Check status of jobs (pg-boss and app)
   jobs:list            - List all pg-boss jobs by name and state
   jobs:reset           - Reset failed/stuck jobs to pending
+  jobs:purge           - ⚠️  DELETE all jobs from pg-boss and Job table
   properties:list      - List all properties with push status
   properties:debug     - Debug property matching for a user (optional: email)
   redis:clear          - Clear Redis rate limiter keys
@@ -419,8 +458,8 @@ Available commands:
 
 Examples:
   npx tsx scripts/dev-utils.ts jobs:status
+  npx tsx scripts/dev-utils.ts jobs:purge
   npx tsx scripts/dev-utils.ts tokens:clear user@example.com
-  npx tsx scripts/dev-utils.ts properties:debug
                 `);
                 process.exit(1);
         }
